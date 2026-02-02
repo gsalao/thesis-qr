@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  @apply bg-gray-50 min-h-screen;
+}
+
+.btn-primary {
+  @apply bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed;
+}
+
+.btn-success {
+  @apply bg-success-500 text-white px-4 py-2 rounded-lg font-medium hover:bg-success-600 transition-colors duration-200;
+}
+
+.btn-danger {
+  @apply bg-danger-500 text-white px-4 py-2 rounded-lg font-medium hover:bg-danger-600 transition-colors duration-200;
+}
+
+.card {
+  @apply bg-white rounded-xl shadow-md p-6;
+}
+
+.input-field {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all;
+}
+
+.badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.badge-success {
+  @apply bg-success-50 text-success-600;
+}
+
+.badge-warning {
+  @apply bg-yellow-50 text-yellow-600;
+}
+
+.badge-danger {
+  @apply bg-danger-50 text-danger-600;
+}

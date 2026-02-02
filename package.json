@@ -1,0 +1,23 @@
+{
+  "name": "dkg-threshold-payment-system",
+  "version": "1.0.0",
+  "description": "Distributed Key Generation (DKG) Threshold Payment System using MERN + BLS12-381",
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm run dev\"",
+    "start": "cd server && npm start",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "dkg",
+    "threshold-signature",
+    "bls12-381",
+    "mern",
+    "socket.io"
+  ],
+  "author": "",
+  "license": "MIT"
+}
