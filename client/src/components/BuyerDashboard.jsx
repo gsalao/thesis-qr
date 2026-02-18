@@ -367,13 +367,22 @@ export default function BuyerDashboard({ user, onLogout }) {
                           style={{ width: `${(tx.collectedCount / tx.threshold) * 100}%` }}
                         />
                       </div>
-                      <button
-                        onClick={() => handleApprove(tx)}
-                        disabled={tx.approving || tx.collectedCount >= tx.threshold}
-                        className="btn-success w-full text-sm"
-                      >
-                        {tx.approving ? 'Signing...' : 'Approve'}
-                      </button>
+                      <div className="flex justify-between gap-2">
+                        <button
+                          onClick={() => handleApprove(tx)}
+                          disabled={tx.approving || tx.collectedCount >= tx.threshold}
+                          className="btn-success w-full text-sm"
+                        >
+                          {tx.approving ? 'Signing...' : 'Approve'}
+                        </button>
+                        <button
+                          disabled={tx.approving || tx.collectedCount >= tx.threshold}
+                          className="btn-danger w-full text-sm"
+                        >
+                          {tx.approving ? 'Rejecting...' : 'Reject'}
+                        </button>
+                      </div>
+                      
                     </div>
                   ))}
                 </div>
