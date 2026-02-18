@@ -267,6 +267,29 @@ export function handleSocketConnection(io, socket) {
     });
   });
 
+  socket.on('reject_share', async (data) => {
+    const { nonce, nodeId, signature } = data;
+    let transaction = pendingTransactions.get(nonce);
+    if (!transaction) {
+      transaction = await Transaction.findOne({ nonce });
+      if (!transaction) {
+        socket.emit('error', { message: 'Transaction not found' });
+        return;
+      }
+    }
+    console.log(`Transaction found: ${transaction._id}, status: ${transaction.status}`);
+    try {
+      sendToNode(io, transaction.requesterId, 'transaction_rejected', {
+        ...data,
+        isForRequester: true,
+        status: 'REJECTED'
+      });
+    } catch (error) {
+      console.log(error.message);
+    }
+    socket.emit('share_rejected', { nonce: transaction.nonce });
+  });
+
   socket.on('disconnect', () => {
     const nodeId = socket.nodeId;
     if (nodeId) {

@@ -130,6 +130,13 @@ export default function BuyerDashboard({ user, onLogout }) {
       }
     });
 
+    socket.on('share_rejected', (data) => {
+      console.log("hello");
+      setPendingApprovals(prev => prev.filter(p => p.nonce !== data.nonce));
+      showNotification('Transaction rejected.', 'info');
+    });
+
+
     return () => {
       socket.off('room_joined');
       socket.off('balance_update');
@@ -138,6 +145,7 @@ export default function BuyerDashboard({ user, onLogout }) {
       socket.off('pending_transactions');
       socket.off('transaction_completed');
       socket.off('transaction_initiated');
+      socket.off('share_rejected');
       socket.off('error');
       socket.off('share_submitted');
     };
@@ -192,6 +200,25 @@ export default function BuyerDashboard({ user, onLogout }) {
     );
 
     showNotification('Signature submitted', 'success');
+  };
+
+  const handleReject = (transaction) => {
+    console.log('handleReject called for nonce:', transaction.nonce);
+
+    // set rejecting to true for button disable
+    setPendingApprovals(prev =>
+      prev.map(p =>
+        p.nonce === transaction.nonce
+          ? { ...p, rejecting: true }
+          : p
+      )
+    );
+
+    // send reject share to server via socket
+    socket.emit('reject_share',{
+      nonce: transaction.nonce,
+      nodeId: user.nodeId
+    });
   };
 
   return (
@@ -370,16 +397,17 @@ export default function BuyerDashboard({ user, onLogout }) {
                       <div className="flex justify-between gap-2">
                         <button
                           onClick={() => handleApprove(tx)}
-                          disabled={tx.approving || tx.collectedCount >= tx.threshold}
+                          disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
                           className="btn-success w-full text-sm"
                         >
                           {tx.approving ? 'Signing...' : 'Approve'}
                         </button>
                         <button
-                          disabled={tx.approving || tx.collectedCount >= tx.threshold}
+                          onClick={() => handleReject(tx)}
+                          disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
                           className="btn-danger w-full text-sm"
                         >
-                          {tx.approving ? 'Rejecting...' : 'Reject'}
+                          {tx.rejecting ? 'Rejecting...' : 'Reject'}
                         </button>
                       </div>
                       
