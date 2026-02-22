@@ -19,7 +19,9 @@ export function hashMessage(message) {
   const messageBytes = new TextEncoder().encode(messageStr);
   const hash = sha256(messageBytes);
   const hashHex = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
-  const hashInt = BigInt('0x' + hashHex);
+  let hashInt = BigInt('0x' + hashHex);
+  hashInt = hashInt % BLS12_381_G1_MODULUS;
+  if (hashInt < 0n) hashInt += BLS12_381_G1_MODULUS;
   return G1.multiply(hashInt);
 }
 
@@ -118,17 +120,42 @@ export function verifySignature(publicKeyHex, message, signatureHex) {
     console.log('Server verify - message:', JSON.stringify(message));
     console.log('Server verify - signature:', JSON.stringify(signatureHex));
 
-    const publicKey = getPointFromHex(
-      publicKeyHex.x,
-      publicKeyHex.y,
-      publicKeyHex.z || '1'
-    );
+    const FIELD = BLS12_381_G1_MODULUS;
 
-    const signature = getPointFromHex(
-      signatureHex.x,
-      signatureHex.y,
-      signatureHex.z || '1'
-    );
+    // Parse without modulo first
+    let pkX = BigInt('0x' + publicKeyHex.x);
+    let pkY = BigInt('0x' + publicKeyHex.y);
+    let pkZ = publicKeyHex.z ? BigInt('0x' + publicKeyHex.z) : 1n;
+    
+    let sigX = BigInt('0x' + signatureHex.x);
+    let sigY = BigInt('0x' + signatureHex.y);
+    let sigZ = signatureHex.z ? BigInt('0x' + signatureHex.z) : 1n;
+
+    // Only reduce if > FIELD
+    if (pkX >= FIELD) pkX = pkX % FIELD;
+    if (pkY >= FIELD) pkY = pkY % FIELD;
+    if (pkZ >= FIELD) pkZ = pkZ % FIELD;
+    if (sigX >= FIELD) sigX = sigX % FIELD;
+    if (sigY >= FIELD) sigY = sigY % FIELD;
+    if (sigZ >= FIELD) sigZ = sigZ % FIELD;
+
+    // Ensure none are zero
+    if (pkX === 0n) pkX = 1n;
+    if (pkY === 0n) pkY = 1n;
+    if (sigX === 0n) sigX = 1n;
+    if (sigY === 0n) sigY = 1n;
+
+    const publicKey = new bls12_381.G1.ProjectivePoint(pkX, pkY, pkZ);
+    const signature = new bls12_381.G1.ProjectivePoint(sigX, sigY, sigZ);
+
+    if (!publicKey.assertValidity()) {
+      console.error('Public key is not valid');
+      return false;
+    }
+    if (!signature.assertValidity()) {
+      console.error('Signature is not valid');
+      return false;
+    }
 
     const messageHash = hashMessage(message);
     console.log('Server - message hash computed');
@@ -138,6 +165,7 @@ export function verifySignature(publicKeyHex, message, signatureHex) {
     console.log('Server - pairing computed');
 
     return left.equals(right);
+   
   } catch (error) {
     console.error('Verification error:', error);
     return false;

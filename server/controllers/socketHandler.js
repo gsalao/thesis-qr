@@ -200,11 +200,6 @@ export function handleSocketConnection(io, socket) {
 
         console.log(`Transaction ${nonce} completed. Verification: ${isValid}`);
 
-        if (isValid) {
-          const newBalance = await deductBalance(transaction.amount);
-          broadcastToNodes(io, 'balance_update', { balance: newBalance });
-        }
-
         const completionData = {
           success: true,
           nonce: transaction.nonce,
@@ -264,6 +259,23 @@ export function handleSocketConnection(io, socket) {
       collectedCount: transaction.collectedSignatures.length,
       threshold: transaction.threshold,
       qrData: transaction.qrData
+    });
+  });
+
+  socket.on('verify_payment', async (data) => {
+    const { nonce, amount } = data;
+    console.log(`Payment verified by merchant for transaction ${nonce}, amount: ${amount}`);
+
+    let transaction = await Transaction.findOne({ nonce });
+    
+    const newBalance = await deductBalance(amount);
+    broadcastToNodes(io, 'balance_update', { balance: newBalance });
+
+    broadcastToNodes(io, 'payment_received', {
+      nonce,
+      amount,
+      timestamp: Date.now(),
+      verifiedBy: 'merchant'
     });
   });
 

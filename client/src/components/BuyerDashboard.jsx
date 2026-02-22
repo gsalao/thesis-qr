@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useSocket } from '../context/SocketContext';
-import { getPrivateShareForNode, signMessage } from '../utils/cryptoUtils';
+import { getPrivateShareForNode, signMessage, hashMessage } from '../utils/cryptoUtils';
 
 export default function BuyerDashboard({ user, onLogout }) {
   const { socket } = useSocket();
@@ -136,6 +136,10 @@ export default function BuyerDashboard({ user, onLogout }) {
       showNotification('Transaction rejected.', 'info');
     });
 
+    socket.on('payment_received', (data) => {
+      showNotification(`Payment of ₱${data.amount} received by merchant!`, 'success');
+    });
+
 
     return () => {
       socket.off('room_joined');
@@ -146,6 +150,7 @@ export default function BuyerDashboard({ user, onLogout }) {
       socket.off('transaction_completed');
       socket.off('transaction_initiated');
       socket.off('share_rejected');
+      socket.off('payment_received');
       socket.off('error');
       socket.off('share_submitted');
     };
@@ -182,7 +187,22 @@ export default function BuyerDashboard({ user, onLogout }) {
       nonce: transaction.nonce
     };
 
+    console.log('=== SIGNING DEBUG ===');
+    console.log('Message being signed:', JSON.stringify(message));
+    console.log('Message amount type:', typeof transaction.amount, 'value:', transaction.amount);
+    console.log('Message timestamp type:', typeof transaction.timestamp, 'value:', transaction.timestamp);
+    console.log('Message nonce:', transaction.nonce);
+    console.log('Node ID:', user.nodeId);
+    console.log('Private share:', privateShare);
+    
+    // Debug hash
+    const msgHash = hashMessage(message);
+    const msgHashAffine = msgHash.toAffine();
+    console.log('Message hash point:', { x: msgHashAffine.x.toString(16), y: msgHashAffine.y.toString(16) });
+    
     const signature = signMessage(message, privateShare);
+    console.log('Signature created:', JSON.stringify(signature));
+    console.log('=====================');
     console.log('Signature created:', signature);
 
     socket.emit('submit_share', {
