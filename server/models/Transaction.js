@@ -38,7 +38,8 @@ const TransactionSchema = new mongoose.Schema({
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
-  expiresAt: { type: Date }
+  expiresAt: { type: Date },
+  rejectedBy: { type: [String], default: [] }
 });
 
 TransactionSchema.pre('save', function(next) {

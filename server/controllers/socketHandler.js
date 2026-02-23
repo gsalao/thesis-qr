@@ -290,11 +290,29 @@ export function handleSocketConnection(io, socket) {
       }
     }
     console.log(`Transaction found: ${transaction._id}, status: ${transaction.status}`);
+
+    // UPDATE DB
     try {
-      sendToNode(io, transaction.requesterId, 'transaction_rejected', {
-        ...data,
-        isForRequester: true,
-        status: 'REJECTED'
+      // 1. Permanently update the status in your MongoDB database
+      await Transaction.updateOne({ nonce }, { $addToSet : {rejectedBy : nodeId} });
+      
+      // Update the memory map so the server knows this node rejected it
+      if (!transaction.rejectedBy) transaction.rejectedBy = [];
+      if (!transaction.rejectedBy.includes(nodeId)) {
+        transaction.rejectedBy.push(nodeId);
+      }
+      
+      console.log(`Transaction ${nonce} successfully marked as REJECTED in database.`);
+    } catch (err) {
+      console.error('Failed to save rejection to DB:', err.message);
+      socket.emit('error', { message: 'Failed to update transaction status' });
+      return; // Stop execution if database fails
+    }
+
+    try {
+      sendToNode(io, transaction.requesterId, 'share_rejected_notification', {
+        message: `Node ${nodeId} rejected your transaction`,
+        nonce: transaction.nonce
       });
     } catch (error) {
       console.log(error.message);

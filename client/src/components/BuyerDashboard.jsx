@@ -36,6 +36,10 @@ export default function BuyerDashboard({ user, onLogout }) {
       }
     });
 
+    socket.on('share_rejected_notification', (data) => {
+      showNotification(data.message, 'warning');
+    });
+
     socket.on('balance_update', (data) => {
       setGroupBalance(data.balance);
     });
@@ -63,10 +67,41 @@ export default function BuyerDashboard({ user, onLogout }) {
       setPendingApprovals(prev => {
         const combined = [...prev];
         transactions.forEach(tx => {
-          if (!combined.find(p => p.nonce === tx.nonce)) {
+          const isNodeRequest = String(tx.requesterId) === String(user.nodeId);
+          const didIReject = tx.rejectedBy && tx.rejectedBy.map(String).includes(String(user.nodeId));
+          
+          // 3. Prevent duplicates
+          const alreadyExists = combined.find(p => p.nonce === tx.nonce);
+
+          // ONLY add to the list if ALL of these are false
+          if (!isNodeRequest && !didIReject && !alreadyExists) {
             combined.push(tx);
           }
         });
+        return combined;
+      });
+      setMyTransactions(prev => {
+        const combined = [...prev];
+        
+        transactions.forEach(tx => {
+          // Check if this transaction was requested by YOU
+          const isMyRequest = String(tx.requesterId) === String(user.nodeId);
+          
+          // Check if it's already in the list so we don't duplicate it
+          const alreadyExists = combined.find(t => t.nonce === tx.nonce);
+
+          // If it IS yours, and it's new, add it to the list!
+          if (isMyRequest && !alreadyExists) {
+            combined.push({
+              ...tx,
+              // Add these helper properties so your UI renders it correctly
+              // (This matches how you set it up in 'transaction_initiated')
+              status: tx.status || 'PENDING',
+              signedByMe: false 
+            });
+          }
+        });
+        
         return combined;
       });
     });
@@ -153,6 +188,8 @@ export default function BuyerDashboard({ user, onLogout }) {
       socket.off('payment_received');
       socket.off('error');
       socket.off('share_submitted');
+      socket.off('share_rejected_notification');
+
     };
   }, [socket, user.nodeId, showNotification]);
 
