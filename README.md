@@ -45,7 +45,7 @@ The result is a QR code presented to a Merchant for verification.
 
 1. **Clone the repository**
    ```bash
-   cd dkg-threshold-payment-system
+   cd thesis-qr
    ```
 
 2. **Install all dependencies**
