@@ -72,9 +72,9 @@ export default function BuyerDashboard({ user, onLogout }) {
           
           // 3. Prevent duplicates
           const alreadyExists = combined.find(p => p.nonce === tx.nonce);
-
+          console.log(tx.threshold)
           // ONLY add to the list if ALL of these are false
-          if (!isNodeRequest && !didIReject && !alreadyExists) {
+          if ((!isNodeRequest || tx.threshold <= 1) && !didIReject && !alreadyExists) {
             combined.push(tx);
           }
         });
@@ -144,6 +144,17 @@ export default function BuyerDashboard({ user, onLogout }) {
           signedByMe: false,
           signers: []
         }, ...prev]);
+        if(threshold <= 1){
+          setPendingApprovals(prev => [{
+            nonce: data.nonce,
+            amount: data.amount,
+            threshold: data.threshold,
+            collectedCount: 0,
+            signedByMe: false,
+            signers: []
+          }, ...prev]);
+        }
+        
         setAmount('');
         showNotification(data.message, 'success');
       }
