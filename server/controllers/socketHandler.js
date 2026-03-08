@@ -6,6 +6,7 @@ import { aggregateSignatures, verifySignature, signMessage } from '../utils/cryp
 
 const activeNodes = new Map();
 const pendingTransactions = new Map();
+const SERVER_START_TIME = new Date();
 
 function getThresholdForAmount(amount) {
   return amount >= 1000 ? THRESHOLD.high : THRESHOLD.low;
@@ -129,7 +130,7 @@ export function handleSocketConnection(io, socket) {
     const balance = await getGroupBalance();
 
     if (amount > balance.balance) {
-      socket.emit('error', { message: 'Insufficient funds in joint account' });
+      socket.emit('error', { message: 'Insufficient funds in joint account.' });
       return;
     }
 
@@ -144,7 +145,7 @@ export function handleSocketConnection(io, socket) {
       status: 'PENDING',
       threshold,
       createdAt: new Date(timestamp),
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 2 * 60 * 1000), // 2 Minutes Expiry
       collectedSignatures: []
     });
 
@@ -366,12 +367,31 @@ export function handleSocketConnection(io, socket) {
     let transaction = await Transaction.findOne({ nonce });
     
     if (!transaction) {
-      socket.emit('error', { message: 'Transaction not found in records.' });
+      socket.emit('error', { message: 'Transaction not found or has expired from records.' });
       return;
     }
 
+    // 1. REJECT PAST SESSIONS (Any transaction created before the current server startup)
+    if (transaction.createdAt < SERVER_START_TIME) {
+      socket.emit('error', { message: 'This QR code is from a previous session and is no longer valid.' });
+      return;
+    }
+
+    // 2. REJECT EXPIRED (Older than 2 minutes)
+    if (transaction.expiresAt && new Date() > transaction.expiresAt) {
+      socket.emit('error', { message: 'Expired' });
+      return;
+    }
+
+    // 3. REPLAY PROTECTION
     if (transaction.status === 'PAID') {
       socket.emit('error', { message: 'This transaction has already been paid and processed.' });
+      return;
+    }
+
+    // 4. ENSURE COMPLETED (Must be signed properly)
+    if (transaction.status !== 'COMPLETED') {
+      socket.emit('error', { message: `Transaction status is ${transaction.status}. Only fully signed transactions can be paid.` });
       return;
     }
 

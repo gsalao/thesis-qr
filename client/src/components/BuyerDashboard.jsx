@@ -221,7 +221,7 @@ export default function BuyerDashboard({ user, onLogout }) {
     }
 
     if (parseFloat(amount) > groupBalance) {
-      showNotification('Insufficient funds in joint account', 'error');
+      showNotification('Insufficient funds in joint account.', 'error');
       return;
     }
 
