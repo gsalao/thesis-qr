@@ -40,6 +40,17 @@ export default function BuyerDashboard({ user, onLogout }) {
       showNotification(data.message, 'warning');
     });
 
+    socket.on('transaction_cancelled', (data) => {
+      setPendingApprovals(prev => prev.filter(p => p.nonce !== data.nonce));
+      setMyTransactions(prev => prev.filter(p => p.nonce !== data.nonce));
+      
+      if (data.requesterId === user.nodeId) {
+        showNotification('Transaction cancelled successfully.', 'info');
+      } else {
+        showNotification(`Transaction from Node ${data.requesterId} has been cancelled.`, 'info');
+      }
+    });
+
     socket.on('balance_update', (data) => {
       setGroupBalance(data.balance);
     });
@@ -207,6 +218,7 @@ export default function BuyerDashboard({ user, onLogout }) {
       socket.off('transaction_initiated');
       socket.off('share_rejected');
       socket.off('payment_received');
+      socket.off('transaction_cancelled');
       socket.off('error');
       socket.off('share_submitted');
       socket.off('share_rejected_notification');
@@ -231,6 +243,23 @@ export default function BuyerDashboard({ user, onLogout }) {
       requesterId: user.nodeId
     });
     setIsSubmitting(false);
+  };
+
+  const handleCancel = (nonce) => {
+    if (!socket) return;
+    
+    setMyTransactions(prev =>
+      prev.map(t =>
+        t.nonce === nonce
+          ? { ...t, status: 'CANCELLING' }
+          : t
+      )
+    );
+
+    socket.emit('cancel_transaction', {
+      nonce,
+      requesterId: user.nodeId
+    });
   };
 
   const handleApprove = (transaction) => {
@@ -422,6 +451,20 @@ export default function BuyerDashboard({ user, onLogout }) {
                           )}
                         </div>
                       </div>
+                      {tx.status === 'PENDING' && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => handleCancel(tx.nonce)}
+                            disabled={tx.status === 'CANCELLING'}
+                            className="text-xs text-danger-600 hover:text-danger-700 font-medium flex items-center gap-1 bg-danger-50 px-2 py-1 rounded"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                            {tx.status === 'CANCELLING' ? 'Cancelling...' : 'Cancel Request'}
+                          </button>
+                        </div>
+                      )}
                       {tx.qrData && tx.status === 'COMPLETED' && (
                         <div 
                           className="mt-3 flex flex-col items-center bg-white p-3 rounded border border-success-200 cursor-pointer hover:bg-success-50 transition-colors"

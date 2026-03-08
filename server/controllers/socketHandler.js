@@ -412,6 +412,45 @@ export function handleSocketConnection(io, socket) {
     socket.emit('payment_processed', { success: true, nonce });
   });
 
+  socket.on('cancel_transaction', async (data) => {
+    const { nonce, requesterId } = data;
+    console.log(`Transaction cancellation request from Node ${requesterId} for nonce ${nonce}`);
+
+    try {
+      const transaction = await Transaction.findOne({ nonce });
+      
+      if (!transaction) {
+        socket.emit('error', { message: 'Transaction not found.' });
+        return;
+      }
+
+      // Verify that the person cancelling is the one who requested it
+      if (String(transaction.requesterId) !== String(requesterId)) {
+        socket.emit('error', { message: 'Unauthorized: Only the requester can cancel this transaction.' });
+        return;
+      }
+
+      if (transaction.status !== 'PENDING') {
+        socket.emit('error', { message: `Cannot cancel transaction with status: ${transaction.status}` });
+        return;
+      }
+
+      transaction.status = 'CANCELLED';
+      await transaction.save();
+      
+      // Remove from pending map if it exists there
+      pendingTransactions.delete(nonce);
+
+      // Broadcast to everyone to remove it from their UI
+      io.emit('transaction_cancelled', { nonce, requesterId });
+      
+      console.log(`Transaction ${nonce} cancelled by requester ${requesterId}`);
+    } catch (error) {
+      console.error('Error cancelling transaction:', error);
+      socket.emit('error', { message: 'Failed to cancel transaction.' });
+    }
+  });
+
   socket.on('reject_share', async (data) => {
     const { nonce, nodeId, signature } = data;
     let transaction = pendingTransactions.get(nonce);
