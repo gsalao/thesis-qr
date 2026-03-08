@@ -126,6 +126,13 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('request_transaction', async (data) => {
     const { amount, requesterId } = data;
+    const balance = await getGroupBalance();
+
+    if (amount > balance.balance) {
+      socket.emit('error', { message: 'Insufficient funds in joint account' });
+      return;
+    }
+
     const nonce = uuidv4();
     const threshold = getThresholdForAmount(amount);
     const timestamp = Date.now();

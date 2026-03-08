@@ -210,6 +210,11 @@ export default function BuyerDashboard({ user, onLogout }) {
       return;
     }
 
+    if (parseFloat(amount) > groupBalance) {
+      showNotification('Insufficient funds in joint account', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
     socket.emit('request_transaction', {
       amount: parseFloat(amount),
