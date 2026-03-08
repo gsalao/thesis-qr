@@ -66,11 +66,25 @@ export default function MerchantDashboard({ user, onLogout }) {
     socket.on('payment_received', (data) => {
       setRecentTransactions(prev => [data, ...prev.slice(0, 9)]);
       showNotification(`Payment received: ₱${data.amount}`, 'success');
+      // Clear current scan state if it matches the one processed
+      clearVerification();
+    });
+
+    socket.on('payment_processed', (data) => {
+      if (data.success) {
+        showNotification('Payment processed successfully!', 'success');
+      }
+    });
+
+    socket.on('error', (data) => {
+      showNotification(data.message, 'error');
     });
 
     return () => {
       socket.off('room_joined');
       socket.off('payment_received');
+      socket.off('payment_processed');
+      socket.off('error');
       stopScanning();
     };
   }, [socket, user, showNotification]);

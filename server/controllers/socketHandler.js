@@ -361,9 +361,23 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('verify_payment', async (data) => {
     const { nonce, amount } = data;
-    console.log(`Payment verified by merchant for transaction ${nonce}, amount: ${amount}`);
+    console.log(`Payment verification request from merchant for transaction ${nonce}, amount: ${amount}`);
 
     let transaction = await Transaction.findOne({ nonce });
+    
+    if (!transaction) {
+      socket.emit('error', { message: 'Transaction not found in records.' });
+      return;
+    }
+
+    if (transaction.status === 'PAID') {
+      socket.emit('error', { message: 'This transaction has already been paid and processed.' });
+      return;
+    }
+
+    // Update status to PAID to prevent replay
+    transaction.status = 'PAID';
+    await transaction.save();
     
     const newBalance = await deductBalance(amount);
     broadcastToNodes(io, 'balance_update', { balance: newBalance });
@@ -374,6 +388,8 @@ export function handleSocketConnection(io, socket) {
       timestamp: Date.now(),
       verifiedBy: 'merchant'
     });
+    
+    socket.emit('payment_processed', { success: true, nonce });
   });
 
   socket.on('reject_share', async (data) => {

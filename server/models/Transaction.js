@@ -16,7 +16,7 @@ const TransactionSchema = new mongoose.Schema({
   requesterId: { type: Number, required: true },
   status: {
     type: String,
-    enum: ['PENDING', 'COMPLETED', 'FAILED', 'EXPIRED'],
+    enum: ['PENDING', 'COMPLETED', 'FAILED', 'EXPIRED', 'PAID'],
     default: 'PENDING'
   },
   threshold: { type: Number, required: true },
