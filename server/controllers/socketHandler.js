@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import Transaction from '../models/Transaction.js';
 import GroupBalance from '../models/GroupBalance.js';
-import { THRESHOLD, JOINT_PUBLIC_KEY } from '../config/keys.js';
-import { aggregateSignatures, verifySignature } from '../utils/cryptoUtils.js';
+import { THRESHOLD, JOINT_PUBLIC_KEY, PRIVATE_SHARES } from '../config/keys.js';
+import { aggregateSignatures, verifySignature, signMessage } from '../utils/cryptoUtils.js';
 
 const activeNodes = new Map();
 const pendingTransactions = new Map();
@@ -144,8 +144,58 @@ export function handleSocketConnection(io, socket) {
       status: 'PENDING',
       threshold,
       createdAt: new Date(timestamp),
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      collectedSignatures: []
     });
+
+    // Automatically add requester's signature
+    const privateShare = PRIVATE_SHARES[requesterId];
+    if (privateShare) {
+      const messageToSign = { amount, timestamp, nonce };
+      const signature = signMessage(messageToSign, privateShare);
+      transaction.collectedSignatures.push({
+        nodeId: requesterId,
+        signature,
+        timestamp: new Date(timestamp)
+      });
+      console.log(`Auto-signed transaction ${nonce} for requester ${requesterId}`);
+    }
+
+    if (transaction.collectedSignatures.length >= threshold) {
+      try {
+        const signers = transaction.collectedSignatures.map(s => s.nodeId);
+        const signatures = transaction.collectedSignatures.map(s => s.signature);
+        const aggregated = aggregateSignatures(signatures, signers);
+        
+        transaction.status = 'COMPLETED';
+        transaction.aggregatedSignature = aggregated;
+        transaction.qrData = { amount, timestamp, nonce, signature: aggregated };
+        await transaction.save();
+
+        socket.emit('transaction_initiated', {
+          success: true,
+          nonce,
+          amount,
+          threshold,
+          status: 'COMPLETED',
+          qrData: transaction.qrData,
+          signers,
+          message: 'Transaction completed immediately (Threshold met)'
+        });
+
+        broadcastToNodes(io, 'transaction_completed', {
+          nonce,
+          amount,
+          qrData: transaction.qrData,
+          signers,
+          isForRequester: false
+        }, requesterId);
+
+        return;
+      } catch (error) {
+        console.error('Auto-aggregation error:', error);
+      }
+    }
 
     await transaction.save();
     pendingTransactions.set(nonce, transaction);
@@ -157,7 +207,8 @@ export function handleSocketConnection(io, socket) {
       amount,
       requesterId,
       threshold,
-      timestamp
+      timestamp,
+      collectedCount: transaction.collectedSignatures.length
     }, requesterId);
 
     socket.emit('transaction_initiated', {
@@ -165,9 +216,9 @@ export function handleSocketConnection(io, socket) {
       nonce,
       amount,
       threshold,
-      message: threshold === 1
-        ? 'Transaction requires 1 signature'
-        : `Transaction requires ${threshold} signatures`
+      status: 'PENDING',
+      collectedCount: transaction.collectedSignatures.length,
+      message: `Transaction initiated. Requires ${threshold} signatures (1/${threshold} collected)`
     });
   });
 

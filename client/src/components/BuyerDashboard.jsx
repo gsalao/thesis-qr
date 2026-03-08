@@ -61,6 +61,13 @@ export default function BuyerDashboard({ user, onLogout }) {
             : p
         )
       );
+      setMyTransactions(prev =>
+        prev.map(t =>
+          t.nonce === data.nonce
+            ? { ...t, collectedCount: data.collectedCount }
+            : t
+        )
+      );
     });
 
     socket.on('pending_transactions', (transactions) => {
@@ -139,19 +146,22 @@ export default function BuyerDashboard({ user, onLogout }) {
         setMyTransactions(prev => [{
           nonce: data.nonce,
           amount: data.amount,
-          status: 'PENDING',
+          status: data.status || 'PENDING',
           threshold: data.threshold,
-          signedByMe: false,
-          signers: []
+          collectedCount: data.collectedCount || (data.status === 'COMPLETED' ? data.threshold : 1),
+          qrData: data.qrData,
+          signedByMe: true,
+          signers: data.signers || [user.nodeId]
         }, ...prev]);
-        if(threshold > 1){
+        
+        if (data.status !== 'COMPLETED' && data.threshold > 1) {
           setPendingApprovals(prev => [{
             nonce: data.nonce,
             amount: data.amount,
             threshold: data.threshold,
-            collectedCount: 0,
-            signedByMe: false,
-            signers: []
+            collectedCount: data.collectedCount || 1,
+            requesterId: user.nodeId,
+            timestamp: Date.now()
           }, ...prev]);
         }
         
@@ -399,11 +409,18 @@ export default function BuyerDashboard({ user, onLogout }) {
                           <p className="font-medium">₱{tx.amount.toLocaleString()}</p>
                           <p className="text-xs text-gray-500">{tx.nonce.slice(0, 12)}...</p>
                         </div>
-                        <span className={`badge ${
-                          tx.status === 'COMPLETED' ? 'badge-success' : 'badge-warning'
-                        }`}>
-                          {tx.status}
-                        </span>
+                        <div className="flex flex-col items-end">
+                          <span className={`badge ${
+                            tx.status === 'COMPLETED' ? 'badge-success' : 'badge-warning'
+                          }`}>
+                            {tx.status}
+                          </span>
+                          {tx.status === 'PENDING' && (
+                            <span className="text-[10px] text-gray-500 mt-1">
+                              {tx.collectedCount}/{tx.threshold} Signatures
+                            </span>
+                          )}
+                        </div>
                       </div>
                       {tx.qrData && tx.status === 'COMPLETED' && (
                         <div 
