@@ -1,25 +1,14 @@
 import { bls12_381 } from '@noble/curves/bls12-381.js';
-import { sha256 } from '@noble/hashes/sha256.js';
 
 const G1 = bls12_381.G1;
+const BLS12_381_ORDER = 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001n;
 
-const PRIVATE_KEYS = [
-  '0000000000000000000000000000000000000000000000000000000000000001',
-  '0000000000000000000000000000000000000000000000000000000000000002',
-  '0000000000000000000000000000000000000000000000000000000000000003',
-  '0000000000000000000000000000000000000000000000000000000000000004',
-  '0000000000000000000000000000000000000000000000000000000000000005'
-];
+const JOINT_SECRET = 0xABC123456789n;
 
-function generatePrivateShare(index) {
-  const privateValue = BigInt('0x' + PRIVATE_KEYS[index - 1]);
-  const basePoint = G1.ProjectivePoint.BASE;
-  const publicKey = basePoint.multiply(privateValue);
-  return {
-    index,
-    privateShare: privateValue.toString(16),
-    publicKeyRaw: publicKey
-  };
+function calculateShare(x) {
+  const xBig = BigInt(x);
+  const val = (JOINT_SECRET + xBig + (xBig * xBig)) % BLS12_381_ORDER;
+  return val;
 }
 
 export function generateKeys() {
@@ -28,12 +17,15 @@ export function generateKeys() {
   const publicKeys = [];
 
   for (let i = 1; i <= NUM_NODES; i++) {
-    const { privateShare, publicKeyRaw } = generatePrivateShare(i);
+    const privateShare = calculateShare(i);
+    const publicKeyRaw = G1.ProjectivePoint.BASE.multiply(privateShare);
     const affine = publicKeyRaw.toAffine();
+    
     shares.push({
       nodeId: i,
       privateShare: privateShare.toString(16)
     });
+    
     publicKeys.push({
       nodeId: i,
       publicKey: {
@@ -44,17 +36,8 @@ export function generateKeys() {
     });
   }
 
-  let jointPublicKey = G1.ProjectivePoint.ZERO;
-  for (const pk of publicKeys) {
-    const point = new G1.ProjectivePoint(
-      BigInt('0x' + pk.publicKey.x),
-      BigInt('0x' + pk.publicKey.y),
-      BigInt('0x' + pk.publicKey.z)
-    );
-    jointPublicKey = jointPublicKey.add(point);
-  }
-
-  const jointAffine = jointPublicKey.toAffine();
+  const jointPublicKeyRaw = G1.ProjectivePoint.BASE.multiply(JOINT_SECRET);
+  const jointAffine = jointPublicKeyRaw.toAffine();
 
   return {
     shares,
