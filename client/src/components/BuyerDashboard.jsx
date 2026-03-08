@@ -51,6 +51,26 @@ export default function BuyerDashboard({ user, onLogout }) {
       }
     });
 
+    socket.on('transaction_expired', (data) => {
+      setPendingApprovals(prev => prev.filter(p => p.nonce !== data.nonce));
+      setMyTransactions(prev => prev.filter(p => p.nonce !== data.nonce));
+
+      if (String(data.requesterId) === String(user.nodeId)) {
+        showNotification('The request expired.', 'error');
+      }
+    });
+
+    socket.on('transaction_denied', (data) => {
+      setPendingApprovals(prev => prev.filter(p => p.nonce !== data.nonce));
+      setMyTransactions(prev => prev.filter(p => p.nonce !== data.nonce));
+
+      if (String(data.requesterId) === String(user.nodeId)) {
+        showNotification('The transaction was denied.', 'error');
+      } else {
+        showNotification(`A transaction has been denied due to too many rejections.`, 'warning');
+      }
+    });
+
     socket.on('balance_update', (data) => {
       setGroupBalance(data.balance);
     });
@@ -219,6 +239,8 @@ export default function BuyerDashboard({ user, onLogout }) {
       socket.off('share_rejected');
       socket.off('payment_received');
       socket.off('transaction_cancelled');
+      socket.off('transaction_expired');
+      socket.off('transaction_denied');
       socket.off('error');
       socket.off('share_submitted');
       socket.off('share_rejected_notification');

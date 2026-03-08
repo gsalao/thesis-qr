@@ -7,6 +7,42 @@ import { aggregateSignatures, verifySignature, signMessage } from '../utils/cryp
 const activeNodes = new Map();
 const pendingTransactions = new Map();
 const SERVER_START_TIME = new Date();
+let expirationCheckerStarted = false;
+
+function startExpirationChecker(io) {
+  if (expirationCheckerStarted) return;
+  expirationCheckerStarted = true;
+  
+  console.log('Starting transaction expiration checker...');
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      // Find pending transactions that have passed their expiresAt
+      const expiredTxs = await Transaction.find({
+        status: 'PENDING',
+        expiresAt: { $lt: now }
+      });
+
+      for (const tx of expiredTxs) {
+        tx.status = 'EXPIRED';
+        await tx.save();
+        
+        // Remove from memory if present
+        pendingTransactions.delete(tx.nonce);
+
+        // Broadcast to all nodes to clear their UI
+        io.emit('transaction_expired', {
+          nonce: tx.nonce,
+          requesterId: tx.requesterId
+        });
+        
+        console.log(`Transaction ${tx.nonce} expired and broadcasted.`);
+      }
+    } catch (err) {
+      console.error('Error in expiration checker:', err);
+    }
+  }, 10000); // Check every 10 seconds
+}
 
 function getThresholdForAmount(amount) {
   return amount >= 1000 ? THRESHOLD.high : THRESHOLD.low;
@@ -64,6 +100,9 @@ function broadcastOccupiedNodes(io) {
 export function handleSocketConnection(io, socket) {
   console.log(`Socket connected: ${socket.id}`);
   
+  // Initialize the expiration job once
+  startExpirationChecker(io);
+
   // Send current occupied nodes to the newly connected socket
   socket.emit('occupied_nodes_update', Array.from(activeNodes.keys()));
 
@@ -474,21 +513,38 @@ export function handleSocketConnection(io, socket) {
         transaction.rejectedBy.push(nodeId);
       }
       
-      console.log(`Transaction ${nonce} successfully marked as REJECTED in database.`);
+      console.log(`Node ${nodeId} rejected transaction ${nonce}. Total rejections: ${transaction.rejectedBy.length}`);
+
+      // Check if it's still possible to meet the threshold
+      // Total nodes = 5. 
+      // Remaining possible signers = Total Nodes - Nodes who rejected
+      const totalNodes = 5;
+      const possibleSigners = totalNodes - transaction.rejectedBy.length;
+      
+      if (possibleSigners < transaction.threshold) {
+        console.log(`Transaction ${nonce} is now impossible to complete. Marking as FAILED.`);
+        transaction.status = 'FAILED';
+        await transaction.save();
+        pendingTransactions.delete(nonce);
+
+        io.emit('transaction_denied', {
+          nonce: transaction.nonce,
+          requesterId: transaction.requesterId,
+          reason: 'Too many rejections'
+        });
+        return;
+      }
+
+      sendToNode(io, transaction.requesterId, 'share_rejected_notification', {
+        message: `Node ${nodeId} rejected your transaction`,
+        nonce: transaction.nonce
+      });
     } catch (err) {
       console.error('Failed to save rejection to DB:', err.message);
       socket.emit('error', { message: 'Failed to update transaction status' });
       return; // Stop execution if database fails
     }
 
-    try {
-      sendToNode(io, transaction.requesterId, 'share_rejected_notification', {
-        message: `Node ${nodeId} rejected your transaction`,
-        nonce: transaction.nonce
-      });
-    } catch (error) {
-      console.log(error.message);
-    }
     socket.emit('share_rejected', { nonce: transaction.nonce });
   });
 
