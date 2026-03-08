@@ -48,16 +48,37 @@ export async function initializeBalance() {
   console.log('Group balance initialized: ₱1,000,000');
 }
 
+function broadcastOccupiedNodes(io) {
+  const occupiedIds = Array.from(activeNodes.keys());
+  io.emit('occupied_nodes_update', occupiedIds);
+}
+
 export function handleSocketConnection(io, socket) {
   console.log(`Socket connected: ${socket.id}`);
+  
+  // Send current occupied nodes to the newly connected socket
+  socket.emit('occupied_nodes_update', Array.from(activeNodes.keys()));
 
   socket.on('join_room', async (data) => {
     const { nodeId, role } = data;
+
+    // CHECK IF NODE IS ALREADY OCCUPIED
+    if (activeNodes.has(nodeId)) {
+      console.log(`Node ${nodeId} is already occupied. Denying join.`);
+      socket.emit('room_joined', {
+        success: false,
+        message: `Node ${nodeId} (${role}) is already logged in on another device/tab.`
+      });
+      return;
+    }
+
     activeNodes.set(nodeId, socket);
     socket.nodeId = nodeId;
     socket.role = role;
 
     console.log(`Node ${nodeId} (${role}) joined`);
+
+    broadcastOccupiedNodes(io);
 
     const balance = await getGroupBalance();
 
@@ -78,6 +99,17 @@ export function handleSocketConnection(io, socket) {
       threshold: tx.threshold,
       timestamp: tx.createdAt.getTime()
     })));
+  });
+
+  socket.on('leave_room', () => {
+    const nodeId = socket.nodeId;
+    if (nodeId) {
+      activeNodes.delete(nodeId);
+      delete socket.nodeId;
+      delete socket.role;
+      console.log(`Node ${nodeId} left the room (logout)`);
+      broadcastOccupiedNodes(io);
+    }
   });
 
   socket.on('get_balance', async () => {
@@ -325,6 +357,7 @@ export function handleSocketConnection(io, socket) {
     if (nodeId) {
       activeNodes.delete(nodeId);
       console.log(`Node ${nodeId} disconnected`);
+      broadcastOccupiedNodes(io);
     }
   });
 }

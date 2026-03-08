@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSocket } from '../context/SocketContext';
 
 const ROLES = [
@@ -14,6 +14,20 @@ export default function Login({ onLogin }) {
   const { socket, isConnected } = useSocket();
   const [selectedRole, setSelectedRole] = useState(null);
   const [isJoining, setIsJoining] = useState(false);
+  const [occupiedNodes, setOccupiedNodes] = useState([]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('occupied_nodes_update', (nodes) => {
+      console.log('Occupied nodes update:', nodes);
+      setOccupiedNodes(nodes);
+    });
+
+    return () => {
+      socket.off('occupied_nodes_update');
+    };
+  }, [socket]);
 
   const handleLogin = async () => {
     if (!selectedRole || !socket) return;
@@ -33,7 +47,7 @@ export default function Login({ onLogin }) {
           jointPublicKey: data.jointPublicKey
         });
       } else {
-        alert('Failed to join room');
+        alert(data.message || 'Failed to join room');
       }
       setIsJoining(false);
     });
@@ -73,11 +87,14 @@ export default function Login({ onLogin }) {
             disabled={!isConnected || isJoining}
           >
             <option value="">Choose a role...</option>
-            {ROLES.map(role => (
-              <option key={role.id} value={role.id}>
-                {role.name}
-              </option>
-            ))}
+            {ROLES.map(role => {
+              const isOccupied = occupiedNodes.includes(role.id);
+              return (
+                <option key={role.id} value={role.id} disabled={isOccupied}>
+                  {role.name} {isOccupied ? '(Already Logged In)' : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
 
@@ -90,10 +107,10 @@ export default function Login({ onLogin }) {
 
         <button
           onClick={handleLogin}
-          disabled={!selectedRole || !isConnected || isJoining}
-          className="btn-primary w-full"
+          disabled={!selectedRole || !isConnected || isJoining || occupiedNodes.includes(selectedRole.id)}
+          className="btn-primary w-full disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
-          {isJoining ? 'Connecting...' : 'Login'}
+          {isJoining ? 'Connecting...' : occupiedNodes.includes(selectedRole?.id) ? 'Role Already Taken' : 'Login'}
         </button>
 
         <div className="mt-6 p-4 bg-blue-50 rounded-lg">

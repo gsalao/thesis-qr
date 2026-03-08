@@ -1,17 +1,21 @@
 import { useState } from 'react';
-import { SocketProvider } from './context/SocketContext';
+import { SocketProvider, useSocket } from './context/SocketContext';
 import Login from './components/Login';
 import BuyerDashboard from './components/BuyerDashboard';
 import MerchantDashboard from './components/MerchantDashboard';
 
 function AppContent() {
   const [user, setUser] = useState(null);
+  const { socket } = useSocket();
 
   const handleLogin = (userData) => {
     setUser(userData);
   };
 
   const handleLogout = () => {
+    if (socket) {
+      socket.emit('leave_room');
+    }
     setUser(null);
   };
 

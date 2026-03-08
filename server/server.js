@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { handleSocketConnection, initializeBalance } from './controllers/socketHandler.js';
+import { JOINT_PUBLIC_KEY } from './config/keys.js';
 
 dotenv.config();
 
@@ -36,7 +37,6 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/joint-public-key', (req, res) => {
-  const { JOINT_PUBLIC_KEY } = require('./config/keys.js');
   res.json(JOINT_PUBLIC_KEY);
 });
 
