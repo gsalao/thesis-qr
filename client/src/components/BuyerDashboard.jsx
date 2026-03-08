@@ -8,7 +8,7 @@ export default function BuyerDashboard({ user, onLogout }) {
   const [amount, setAmount] = useState('');
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [myTransactions, setMyTransactions] = useState([]);
-  const [groupBalance, setGroupBalance] = useState(1000000);
+  const [groupBalance, setGroupBalance] = useState(user.groupBalance || 1000000);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notification, setNotification] = useState(null);
   const [selectedQrImage, setSelectedQrImage] = useState(null);

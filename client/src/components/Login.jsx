@@ -44,7 +44,8 @@ export default function Login({ onLogin }) {
         onLogin({
           nodeId: data.nodeId,
           role: data.role,
-          jointPublicKey: data.jointPublicKey
+          jointPublicKey: data.jointPublicKey,
+          groupBalance: data.groupBalance
         });
       } else {
         alert(data.message || 'Failed to join room');
