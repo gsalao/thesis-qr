@@ -107,12 +107,32 @@ export default function MerchantDashboard({ user, onLogout }) {
         },
         (decodedText) => {
           console.log(`QR Code detected: ${decodedText}`);
-          setQrInput(decodedText);
-          stopScanning();
-          showNotification('QR Code scanned successfully!', 'success');
+          
+          try {
+            // Quick check if it's JSON and has our required fields
+            const testData = JSON.parse(decodedText);
+            if (!testData.amount || !testData.nonce || !testData.signature) {
+              throw new Error('Missing payload fields');
+            }
+            
+            setQrInput(decodedText);
+            stopScanning();
+            showNotification('QR Code scanned successfully!', 'success');
+          } catch (e) {
+            // Not our system's QR code (e.g., GCash, random URL, etc.)
+            console.warn('Invalid QR scanned:', decodedText);
+            stopScanning();
+            setQrInput(decodedText);
+            showNotification('Invalid QR: This code is not from our system.', 'error');
+            
+            setVerificationResult({
+              valid: false,
+              error: 'Invalid QR Code: Source Not Recognized'
+            });
+          }
         },
         (errorMessage) => {
-          console.log(errorMessage);
+          // console.log(errorMessage);
         }
       );
     } catch (err) {
@@ -143,18 +163,22 @@ export default function MerchantDashboard({ user, onLogout }) {
     setIsVerifying(true);
 
     try {
-      const qrData = JSON.parse(qrInput);
+      let qrData;
+      try {
+        qrData = JSON.parse(qrInput);
+      } catch (e) {
+        throw new Error('Invalid QR: Code format not recognized by this system.');
+      }
 
       if (!qrData.amount || !qrData.timestamp || !qrData.nonce || !qrData.signature) {
-        throw new Error('Invalid QR data format');
+        throw new Error('Invalid QR: Missing system-required payload fields.');
       }
 
       // The actual cryptographic verification happens on the server via 'verify_payment'
       // but we still want to show a verification state in the UI.
-      // We'll assume it's valid if the server accepts it, or we could add a verification event.
       
       const result = {
-        valid: true, // We'll update this once the server responds if needed
+        valid: true, 
         amount: qrData.amount,
         timestamp: qrData.timestamp,
         nonce: qrData.nonce,
@@ -163,7 +187,7 @@ export default function MerchantDashboard({ user, onLogout }) {
 
       setVerificationResult(result);
       
-      showNotification('Signature verified successfully!', 'success');
+      showNotification('QR Payload Validated!', 'success');
       socket.emit('verify_payment', {
         nonce: qrData.nonce,
         amount: qrData.amount
@@ -174,10 +198,10 @@ export default function MerchantDashboard({ user, onLogout }) {
         valid: false,
         error: error.message || 'Invalid QR data format'
       });
-      showNotification('Invalid QR data format', 'error');
+      showNotification(error.message || 'Invalid QR data format', 'error');
+    } finally {
+      setIsVerifying(false);
     }
-
-    setIsVerifying(false);
   };
 
   const clearVerification = () => {
@@ -338,22 +362,34 @@ export default function MerchantDashboard({ user, onLogout }) {
                     }`}>
                       {verificationResult.valid ? 'PAYMENT VERIFIED' : 'VERIFICATION FAILED'}
                     </h3>
-                    <p className="text-lg font-semibold text-gray-800">₱{verificationResult.amount.toLocaleString()}</p>
+                    <p className="text-lg font-semibold text-gray-800">
+                      {verificationResult.valid 
+                        ? `₱${verificationResult.amount?.toLocaleString() || '0'}` 
+                        : (verificationResult.error || 'Invalid QR Data')}
+                    </p>
                   </div>
                 </div>
 
                 <div className="space-y-3 text-sm">
-                  <div className="flex justify-between py-2 border-b border-gray-200">
-                    <span className="text-gray-600">Transaction ID</span>
-                    <span className="font-mono">{verificationResult.nonce.slice(0, 16)}...</span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-gray-200">
-                    <span className="text-gray-600">Verified At</span>
-                    <span>{verificationResult.time}</span>
-                  </div>
-                  {verificationResult.valid && (
+                  {verificationResult.nonce && (
+                    <div className="flex justify-between py-2 border-b border-gray-200">
+                      <span className="text-gray-600">Transaction ID</span>
+                      <span className="font-mono">{verificationResult.nonce.slice(0, 16)}...</span>
+                    </div>
+                  )}
+                  {verificationResult.time && (
+                    <div className="flex justify-between py-2 border-b border-gray-200">
+                      <span className="text-gray-600">Verified At</span>
+                      <span>{verificationResult.time}</span>
+                    </div>
+                  )}
+                  {verificationResult.valid ? (
                     <div className="mt-4 p-3 bg-success-100 rounded-lg">
                       <p className="text-success-700 text-sm font-medium">✓ Signature is valid and authentic</p>
+                    </div>
+                  ) : (
+                    <div className="mt-4 p-3 bg-danger-100 rounded-lg">
+                      <p className="text-danger-700 text-sm font-medium">✗ {verificationResult.error || 'This QR code cannot be processed'}</p>
                     </div>
                   )}
                 </div>
