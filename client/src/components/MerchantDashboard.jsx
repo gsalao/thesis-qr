@@ -78,6 +78,10 @@ export default function MerchantDashboard({ user, onLogout }) {
 
     socket.on('error', (data) => {
       showNotification(data.message, 'error');
+      setVerificationResult({
+        valid: false,
+        error: data.message}
+      );
     });
 
     return () => {
@@ -389,7 +393,7 @@ export default function MerchantDashboard({ user, onLogout }) {
                     </div>
                   ) : (
                     <div className="mt-4 p-3 bg-danger-100 rounded-lg">
-                      <p className="text-danger-700 text-sm font-medium">✗ {verificationResult.error || 'This QR code cannot be processed'}</p>
+                      {/* <p className="text-danger-700 text-sm font-medium">✗ {verificationResult.error || 'This QR code cannot be processed'}</p> */}
                     </div>
                   )}
                 </div>
