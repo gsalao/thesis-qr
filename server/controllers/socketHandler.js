@@ -44,8 +44,15 @@ async function deductBalance(amount) {
 }
 
 export async function initializeBalance() {
-  await getGroupBalance();
-  console.log('Group balance initialized: ₱1,000,000');
+  let balance = await GroupBalance.findById('joint-account');
+  if (!balance) {
+    balance = new GroupBalance({ _id: 'joint-account', balance: 1000000, currency: 'PHP' });
+  } else {
+    balance.balance = 1000000;
+    balance.lastUpdated = new Date();
+  }
+  await balance.save();
+  console.log('Group balance reset/initialized to: ₱1,000,000');
 }
 
 function broadcastOccupiedNodes(io) {
