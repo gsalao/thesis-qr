@@ -66,8 +66,6 @@ export default function MerchantDashboard({ user, onLogout }) {
     socket.on('payment_received', (data) => {
       setRecentTransactions(prev => [data, ...prev.slice(0, 9)]);
       showNotification(`Payment received: ₱${data.amount}`, 'success');
-      // Clear current scan state if it matches the one processed
-      clearVerification();
     });
 
     socket.on('payment_processed', (data) => {
