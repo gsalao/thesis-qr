@@ -475,16 +475,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                       </div>
                       {tx.status === 'PENDING' && (
                         <div className="mt-3">
-                          <button
-                            onClick={() => handleCancel(tx.nonce)}
-                            disabled={tx.status === 'CANCELLING'}
-                            className="text-xs text-danger-600 hover:text-danger-700 font-medium flex items-center gap-1 bg-danger-50 px-2 py-1 rounded"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                            {tx.status === 'CANCELLING' ? 'Cancelling...' : 'Cancel Request'}
-                          </button>
+                          {/* Cancel Request button removed from here as requested */}
                         </div>
                       )}
                       {tx.qrData && tx.status === 'COMPLETED' && (
@@ -550,20 +541,32 @@ export default function BuyerDashboard({ user, onLogout }) {
                         />
                       </div>
                       <div className="flex justify-between gap-2">
-                        <button
-                          onClick={() => handleApprove(tx)}
-                          disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
-                          className="btn-success w-full text-sm"
-                        >
-                          {tx.approving ? 'Signing...' : 'Approve'}
-                        </button>
-                        <button
-                          onClick={() => handleReject(tx)}
-                          disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
-                          className="btn-danger w-full text-sm"
-                        >
-                          {tx.rejecting ? 'Rejecting...' : 'Reject'}
-                        </button>
+                        {String(tx.requesterId) === String(user.nodeId) ? (
+                          <button
+                            onClick={() => handleCancel(tx.nonce)}
+                            disabled={tx.status === 'CANCELLING'}
+                            className="btn-danger w-full text-sm"
+                          >
+                            {tx.status === 'CANCELLING' ? 'Cancelling...' : 'Cancel'}
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleApprove(tx)}
+                              disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
+                              className="btn-success w-full text-sm"
+                            >
+                              {tx.approving ? 'Signing...' : 'Approve'}
+                            </button>
+                            <button
+                              onClick={() => handleReject(tx)}
+                              disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
+                              className="btn-danger w-full text-sm"
+                            >
+                              {tx.rejecting ? 'Rejecting...' : 'Reject'}
+                            </button>
+                          </>
+                        )}
                       </div>
                       
                     </div>
