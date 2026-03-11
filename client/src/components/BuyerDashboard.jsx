@@ -421,7 +421,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                   <p className="text-sm text-gray-600">
                     <strong>Policy:</strong>
                     {amount && parseFloat(amount) >= 1000 ? (
-                      <span className="text-yellow-600"> Requires 3 signatures</span>
+                      <span className="text-yellow-600"> Requires 2 external signatures</span>
                     ) : (
                       <span className="text-green-600"> Requires 1 signature</span>
                     )}
