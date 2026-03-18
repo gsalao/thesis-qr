@@ -1,0 +1,41 @@
+name: Auto Merge to Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  merge-to-deploy:
+    name: Merge to Deploy Branch
+    runs-on: ubuntu-latest
+    
+    # Crucial: Grants the action permission to push back to your repository
+    permissions:
+      contents: write 
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches all history for all branches so Git can merge properly
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge main into deploy and push
+        run: |
+          # Fetch the latest branches from the remote
+          git fetch origin
+          
+          # Check out the deploy branch
+          git checkout deploy
+          
+          # Merge the latest changes from main
+          # --no-edit accepts the default merge commit message
+          git merge origin/main --no-edit
+          
+          # Push the updated deploy branch back to GitHub
+          git push origin deploy
