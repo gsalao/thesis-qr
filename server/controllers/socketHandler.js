@@ -248,6 +248,7 @@ export function handleSocketConnection(io, socket) {
       requesterId,
       threshold,
       timestamp,
+      expiresAt: transaction.expiresAt.toISOString(),
       collectedCount: transaction.collectedSignatures.length
     }, requesterId);
 
@@ -257,6 +258,7 @@ export function handleSocketConnection(io, socket) {
       amount,
       threshold,
       status: 'PENDING',
+      expiresAt: transaction.expiresAt.toISOString(),
       collectedCount: transaction.collectedSignatures.length,
       message: `Transaction initiated. Requires ${threshold} signatures (1/${threshold} collected)`
     });

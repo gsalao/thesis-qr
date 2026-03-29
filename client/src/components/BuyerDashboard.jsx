@@ -1,7 +1,58 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useSocket } from '../context/SocketContext';
 import { getPrivateShareForNode, signMessage, hashMessage } from '../utils/cryptoUtils';
+
+function getTimeRemaining(expiresAt) {
+  if (!expiresAt) return null;
+  const total = new Date(expiresAt) - new Date();
+  if (total <= 0) return { expired: true, total: 0 };
+  return {
+    expired: false,
+    total,
+    minutes: Math.floor(total / 60000),
+    seconds: Math.floor((total % 60000) / 1000)
+  };
+}
+
+function CountdownBadge({ expiresAt }) {
+  const [timeRemaining, setTimeRemaining] = useState(() => getTimeRemaining(expiresAt));
+
+  useEffect(() => {
+    if (!expiresAt) return;
+    const interval = setInterval(() => {
+      setTimeRemaining(getTimeRemaining(expiresAt));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+
+  if (!timeRemaining) return null;
+
+  if (timeRemaining.expired) {
+    return (
+      <span className="badge badge-danger flex items-center gap-1">
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+        Expired
+      </span>
+    );
+  }
+
+  const { minutes, seconds } = timeRemaining;
+  const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  const isUrgent = timeRemaining.total < 30000;
+  const isWarning = timeRemaining.total < 60000;
+
+  return (
+    <span className={`badge flex items-center gap-1 ${isUrgent ? 'badge-danger animate-pulse' : isWarning ? 'badge-warning' : 'badge-success'}`}>
+      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      {timeString}
+    </span>
+  );
+}
 
 export default function BuyerDashboard({ user, onLogout }) {
   const { socket } = useSocket();
@@ -179,6 +230,7 @@ export default function BuyerDashboard({ user, onLogout }) {
           amount: data.amount,
           status: data.status || 'PENDING',
           threshold: data.threshold,
+          expiresAt: data.expiresAt,
           collectedCount: data.collectedCount || (data.status === 'COMPLETED' ? data.threshold : 1),
           qrData: data.qrData,
           signedByMe: true,
@@ -190,6 +242,7 @@ export default function BuyerDashboard({ user, onLogout }) {
             nonce: data.nonce,
             amount: data.amount,
             threshold: data.threshold,
+            expiresAt: data.expiresAt,
             collectedCount: data.collectedCount || 1,
             requesterId: user.nodeId,
             timestamp: Date.now()
@@ -453,20 +506,25 @@ export default function BuyerDashboard({ user, onLogout }) {
                 <p className="text-gray-500 text-sm">No transactions yet</p>
               ) : (
                 <div className="space-y-3">
-                  {myTransactions.map((tx) => (
-                    <div key={tx.nonce} className="p-3 border border-gray-200 rounded-lg">
+                  {myTransactions.map((tx) => {
+                    const isExpired = tx.expiresAt && new Date(tx.expiresAt) < new Date();
+                    return (
+                    <div key={tx.nonce} className={`p-3 border rounded-lg ${isExpired ? 'border-danger-300 bg-danger-50' : 'border-gray-200'}`}>
                       <div className="flex justify-between items-start">
                         <div>
                           <p className="font-medium">₱{tx.amount.toLocaleString()}</p>
                           <p className="text-xs text-gray-500">{tx.nonce.slice(0, 12)}...</p>
                         </div>
-                        <div className="flex flex-col items-end">
+                        <div className="flex flex-col items-end gap-1">
+                          {tx.status === 'PENDING' && tx.expiresAt && (
+                            <CountdownBadge expiresAt={tx.expiresAt} />
+                          )}
                           <span className={`badge ${
-                            tx.status === 'COMPLETED' ? 'badge-success' : 'badge-warning'
+                            tx.status === 'COMPLETED' ? 'badge-success' : isExpired ? 'badge-danger' : 'badge-warning'
                           }`}>
-                            {tx.status}
+                            {isExpired ? 'EXPIRED' : tx.status}
                           </span>
-                          {tx.status === 'PENDING' && (
+                          {tx.status === 'PENDING' && !isExpired && (
                             <span className="text-[10px] text-gray-500 mt-1">
                               {tx.collectedCount}/{tx.threshold} Signatures
                             </span>
@@ -491,9 +549,9 @@ export default function BuyerDashboard({ user, onLogout }) {
                           />
                           <p className="text-xs text-gray-500 mt-2">Click to view full size</p>
                         </div>
-                      )}
+                        )}
                     </div>
-                  ))}
+                  );})}
                 </div>
               )}
             </div>
@@ -521,8 +579,10 @@ export default function BuyerDashboard({ user, onLogout }) {
                 <p className="text-gray-500 text-sm">No pending approvals</p>
               ) : (
                 <div className="space-y-3">
-                  {pendingApprovals.map((tx) => (
-                    <div key={tx.nonce} className="p-4 border border-gray-200 rounded-lg">
+                  {pendingApprovals.map((tx) => {
+                    const isExpired = tx.expiresAt && new Date(tx.expiresAt) < new Date();
+                    return (
+                    <div key={tx.nonce} className={`p-4 border rounded-lg ${isExpired ? 'border-danger-300 bg-danger-50' : 'border-gray-200'}`}>
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <p className="font-medium">₱{tx.amount}</p>
@@ -530,9 +590,12 @@ export default function BuyerDashboard({ user, onLogout }) {
                             From Node {tx.requesterId} • {tx.nonce.slice(0, 8)}...
                           </p>
                         </div>
-                        <span className="badge badge-warning">
-                          {tx.collectedCount}/{tx.threshold}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <CountdownBadge expiresAt={tx.expiresAt} />
+                          <span className="badge badge-warning">
+                            {tx.collectedCount}/{tx.threshold}
+                          </span>
+                        </div>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
                         <div
@@ -544,33 +607,33 @@ export default function BuyerDashboard({ user, onLogout }) {
                         {String(tx.requesterId) === String(user.nodeId) ? (
                           <button
                             onClick={() => handleCancel(tx.nonce)}
-                            disabled={tx.status === 'CANCELLING'}
+                            disabled={tx.status === 'CANCELLING' || isExpired}
                             className="btn-danger w-full text-sm"
                           >
-                            {tx.status === 'CANCELLING' ? 'Cancelling...' : 'Cancel'}
+                            {tx.status === 'CANCELLING' ? 'Cancelling...' : isExpired ? 'Expired' : 'Cancel'}
                           </button>
                         ) : (
                           <>
                             <button
                               onClick={() => handleApprove(tx)}
-                              disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
+                              disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold || isExpired}
                               className="btn-success w-full text-sm"
                             >
-                              {tx.approving ? 'Signing...' : 'Approve'}
+                              {tx.approving ? 'Signing...' : isExpired ? 'Expired' : 'Approve'}
                             </button>
                             <button
                               onClick={() => handleReject(tx)}
-                              disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold}
+                              disabled={tx.approving || tx.rejecting || tx.collectedCount >= tx.threshold || isExpired}
                               className="btn-danger w-full text-sm"
                             >
-                              {tx.rejecting ? 'Rejecting...' : 'Reject'}
+                              {tx.rejecting ? 'Rejecting...' : isExpired ? 'Expired' : 'Reject'}
                             </button>
                           </>
                         )}
                       </div>
                       
                     </div>
-                  ))}
+                  );})}
                 </div>
               )}
             </div>
