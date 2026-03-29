@@ -17,9 +17,9 @@ function startExpirationChecker(io) {
   setInterval(async () => {
     try {
       const now = new Date();
-      // Find pending transactions that have passed their expiresAt
+      // Find pending and completed transactions that have passed their expiresAt
       const expiredTxs = await Transaction.find({
-        status: 'PENDING',
+        status: { $in: ['PENDING', 'COMPLETED'] },
         expiresAt: { $lt: now }
       });
 
@@ -210,6 +210,7 @@ export function handleSocketConnection(io, socket) {
         transaction.status = 'COMPLETED';
         transaction.aggregatedSignature = aggregated;
         transaction.qrData = { amount, timestamp, nonce, signature: aggregated };
+        transaction.qrExpiresAt = new Date(Date.now() + 2 * 60 * 1000);
         await transaction.save();
 
         socket.emit('transaction_initiated', {
@@ -218,6 +219,8 @@ export function handleSocketConnection(io, socket) {
           amount,
           threshold,
           status: 'COMPLETED',
+          expiresAt: transaction.expiresAt.toISOString(),
+          qrExpiresAt: transaction.qrExpiresAt.toISOString(),
           qrData: transaction.qrData,
           signers,
           message: 'Transaction completed immediately (Threshold met)'
@@ -279,6 +282,11 @@ export function handleSocketConnection(io, socket) {
 
     console.log(`Transaction found: ${transaction._id}, status: ${transaction.status}`);
 
+    if (transaction.expiresAt && new Date() > transaction.expiresAt) {
+      socket.emit('share_rejected', { nonce, message: 'Transaction has expired' });
+      return;
+    }
+
     if (transaction.status === 'COMPLETED') {
       socket.emit('share_submitted', { success: true, alreadyCompleted: true });
       return;
@@ -327,6 +335,7 @@ export function handleSocketConnection(io, socket) {
         transaction.status = 'COMPLETED';
         transaction.aggregatedSignature = aggregated;
         transaction.qrData = qrData;
+        transaction.qrExpiresAt = new Date(Date.now() + 2 * 60 * 1000);
         await transaction.save();
 
         const messageToVerify = {
@@ -343,6 +352,8 @@ export function handleSocketConnection(io, socket) {
           success: true,
           nonce: transaction.nonce,
           amount: transaction.amount,
+          expiresAt: transaction.expiresAt.toISOString(),
+          qrExpiresAt: transaction.qrExpiresAt.toISOString(),
           qrData,
           signers: signers,
           verificationResult: isValid
@@ -418,9 +429,13 @@ export function handleSocketConnection(io, socket) {
       return;
     }
 
-    // 2. REJECT EXPIRED (Older than 2 minutes)
-    if (transaction.expiresAt && new Date() > transaction.expiresAt) {
-      socket.emit('error', { message: 'Expired' });
+    // 2. REJECT EXPIRED (Check qrExpiresAt for completed transactions)
+    if (transaction.status === 'COMPLETED' && transaction.qrExpiresAt && new Date() > transaction.qrExpiresAt) {
+      socket.emit('error', { message: 'QR code has expired' });
+      return;
+    }
+    if (transaction.status === 'EXPIRED') {
+      socket.emit('error', { message: 'Transaction has expired' });
       return;
     }
 

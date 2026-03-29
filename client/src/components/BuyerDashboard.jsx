@@ -63,19 +63,25 @@ export default function BuyerDashboard({ user, onLogout }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notification, setNotification] = useState(null);
   const [selectedQrImage, setSelectedQrImage] = useState(null);
+  const [selectedQrExpiresAt, setSelectedQrExpiresAt] = useState(null);
+  const [selectedTxStatus, setSelectedTxStatus] = useState(null);
 
   const showNotification = useCallback((message, type = 'info') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 5000);
   }, []);
 
-  const openQrModal = (qrData) => {
+  const openQrModal = (qrData, qrExpiresAt, status) => {
     const qrString = JSON.stringify(qrData);
     setSelectedQrImage(qrString);
+    setSelectedQrExpiresAt(qrExpiresAt);
+    setSelectedTxStatus(status);
   };
 
   const closeQrModal = () => {
     setSelectedQrImage(null);
+    setSelectedQrExpiresAt(null);
+    setSelectedTxStatus(null);
   };
 
   useEffect(() => {
@@ -231,6 +237,7 @@ export default function BuyerDashboard({ user, onLogout }) {
           status: data.status || 'PENDING',
           threshold: data.threshold,
           expiresAt: data.expiresAt,
+          qrExpiresAt: data.qrExpiresAt,
           collectedCount: data.collectedCount || (data.status === 'COMPLETED' ? data.threshold : 1),
           qrData: data.qrData,
           signedByMe: true,
@@ -277,6 +284,9 @@ export default function BuyerDashboard({ user, onLogout }) {
     });
 
     socket.on('payment_received', (data) => {
+      setMyTransactions(prev => prev.map(t =>
+        t.nonce === data.nonce ? { ...t, status: 'PAID' } : t
+      ));
       showNotification(`Payment of ₱${data.amount} received by merchant!`, 'success');
     });
 
@@ -509,7 +519,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                   {myTransactions.map((tx) => {
                     const isExpired = tx.expiresAt && new Date(tx.expiresAt) < new Date();
                     return (
-                    <div key={tx.nonce} className={`p-3 border rounded-lg ${isExpired ? 'border-danger-300 bg-danger-50' : 'border-gray-200'}`}>
+                    <div key={tx.nonce} className={`p-3 border rounded-lg ${tx.status === 'PAID' ? 'border-success-300 bg-success-50' : tx.status === 'PENDING' ? 'border-warning-300 bg-warning-50' : isExpired ? 'border-danger-300 bg-danger-50' : 'border-gray-200'}`}>
                       <div className="flex justify-between items-start">
                         <div>
                           <p className="font-medium">₱{tx.amount.toLocaleString()}</p>
@@ -520,9 +530,9 @@ export default function BuyerDashboard({ user, onLogout }) {
                             <CountdownBadge expiresAt={tx.expiresAt} />
                           )}
                           <span className={`badge ${
-                            tx.status === 'COMPLETED' ? 'badge-success' : isExpired ? 'badge-danger' : 'badge-warning'
+                            tx.status === 'PAID' ? 'badge-success' : isExpired ? 'badge-danger' : 'badge-warning'
                           }`}>
-                            {isExpired ? 'EXPIRED' : tx.status}
+                            {isExpired ? 'EXPIRED' : tx.status === 'PAID' ? 'PAID' : 'PENDING'}
                           </span>
                           {tx.status === 'PENDING' && !isExpired && (
                             <span className="text-[10px] text-gray-500 mt-1">
@@ -536,12 +546,26 @@ export default function BuyerDashboard({ user, onLogout }) {
                           {/* Cancel Request button removed from here as requested */}
                         </div>
                       )}
-                      {tx.qrData && tx.status === 'COMPLETED' && (
+                      {tx.qrData && (tx.status === 'COMPLETED' || tx.status === 'PAID') && (
                         <div 
                           className="mt-3 flex flex-col items-center bg-white p-3 rounded border border-success-200 cursor-pointer hover:bg-success-50 transition-colors"
-                          onClick={() => openQrModal(tx.qrData)}
+                          onClick={() => openQrModal(tx.qrData, tx.qrExpiresAt, tx.status)}
                         >
-                          <p className="text-xs text-success-600 mb-2 font-medium">Tap to enlarge QR</p>
+                          <div className="flex items-center gap-2 mb-2">
+                            {tx.status === 'PAID' ? (
+                              <span className="badge badge-success flex items-center gap-1">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                                PAID
+                              </span>
+                            ) : (
+                              <>
+                                <p className="text-xs text-success-600 font-medium">QR Generated</p>
+                                {tx.qrExpiresAt && <CountdownBadge expiresAt={tx.qrExpiresAt} />}
+                              </>
+                            )}
+                          </div>
                           <QRCodeSVG
                             value={JSON.stringify(tx.qrData)}
                             size={140}
@@ -665,7 +689,23 @@ export default function BuyerDashboard({ user, onLogout }) {
             </button>
             <div className="text-center">
               <h3 className="text-xl font-bold text-gray-800 mb-2">Your Payment QR Code</h3>
-              <p className="text-gray-500 text-sm mb-6">Show this to the merchant</p>
+              {selectedTxStatus === 'PAID' ? (
+                <div className="mb-4">
+                  <span className="badge badge-success flex items-center gap-1 text-sm py-2 px-4">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    PAID
+                  </span>
+                </div>
+              ) : (
+                selectedQrExpiresAt && (
+                  <div className="mb-4">
+                    <CountdownBadge expiresAt={selectedQrExpiresAt} />
+                  </div>
+                )
+              )}
+              <p className="text-gray-500 text-sm mb-6">{selectedTxStatus === 'PAID' ? 'Payment completed!' : 'Show this to the merchant'}</p>
               <div className="bg-white p-4 rounded-xl shadow-lg inline-block">
                 <QRCodeSVG
                   value={selectedQrImage}
