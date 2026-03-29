@@ -184,7 +184,7 @@ export function handleSocketConnection(io, socket) {
       status: 'PENDING',
       threshold,
       createdAt: new Date(timestamp),
-      expiresAt: new Date(Date.now() + 1 * 60 * 1000), // 2 Minutes Expiry
+      expiresAt: new Date(Date.now() + 2 * 60 * 1000), // 2 Minutes Expiry
       collectedSignatures: []
     });
 
