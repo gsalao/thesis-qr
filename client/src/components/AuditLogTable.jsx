@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { useSocket } from '../context/SocketContext';
 
 const EVENT_TYPE_COLORS = {
@@ -7,10 +7,28 @@ const EVENT_TYPE_COLORS = {
   PAYMENT_INITIATED: 'bg-blue-100 text-blue-800',
   PAYMENT_APPROVED: 'bg-success-100 text-success-800',
   PAYMENT_REJECTED: 'bg-danger-100 text-danger-800',
+  PAYMENT_DECLINED: 'bg-danger-100 text-danger-800',
+  PAYMENT_CANCELLED: 'bg-orange-100 text-orange-800',
   QR_GENERATED: 'bg-purple-100 text-purple-800',
+  QR_EXPIRED: 'bg-red-100 text-red-800',
   PAYMENT_VERIFIED: 'bg-yellow-100 text-yellow-800',
-  THRESHOLD_REACHED: 'bg-primary-100 text-primary-800'
+  THRESHOLD_REACHED: 'bg-primary-100 text-primary-800',
+  THRESHOLD_NOT_MET: 'bg-danger-100 text-danger-800'
 };
+
+const ALL_EVENT_TYPES = [
+  'NODE_ONLINE',
+  'NODE_OFFLINE',
+  'PAYMENT_INITIATED',
+  'PAYMENT_APPROVED',
+  'PAYMENT_REJECTED',
+  'PAYMENT_CANCELLED',
+  'QR_GENERATED',
+  'QR_EXPIRED',
+  'PAYMENT_VERIFIED',
+  'THRESHOLD_REACHED',
+  'THRESHOLD_NOT_MET'
+];
 
 function formatPHTDate(date) {
   if (!date) return '';
@@ -32,44 +50,38 @@ function formatPHTDate(date) {
 export default function AuditLogTable({ user, onHome, isMerchantView = false }) {
   const { socket, auditLogs, lastSeen, fetchAuditLogs, clearDisplayLogs } = useSocket();
   const [displayedLogs, setDisplayedLogs] = useState([]);
+  const [limit, setLimit] = useState(50);
+  const [hasMore, setHasMore] = useState(true);
+  const [selectedEvents, setSelectedEvents] = useState([]);
+  const [idFilter, setIdFilter] = useState('');
+  const [showFilter, setShowFilter] = useState(false);
 
   useEffect(() => {
-    fetchAuditLogs(50);
-  }, [fetchAuditLogs]);
+    fetchAuditLogs(limit);
+  }, [fetchAuditLogs, limit]);
 
   useEffect(() => {
     setDisplayedLogs(auditLogs);
-  }, [auditLogs]);
+    setHasMore(auditLogs.length >= limit);
+  }, [auditLogs, limit]);
 
-  const filteredLogs = useMemo(() => {
-    if (isMerchantView) {
-      return displayedLogs.filter(log => 
-        log.eventType === 'PAYMENT_VERIFIED' ||
-        log.eventType === 'QR_GENERATED' ||
-        log.eventType === 'PAYMENT_INITIATED' ||
-        log.eventType === 'PAYMENT_APPROVED' ||
-        log.eventType === 'PAYMENT_REJECTED' ||
-        log.eventType === 'THRESHOLD_REACHED'
-      );
+  const filteredLogs = (() => {
+    let logs = displayedLogs;
+    
+    if (selectedEvents.length > 0) {
+      logs = logs.filter(log => selectedEvents.includes(log.eventType));
     }
     
-    const nodeId = user?.nodeId;
-    return displayedLogs.filter(log => {
-      if (log.eventType === 'NODE_ONLINE' || log.eventType === 'NODE_OFFLINE') {
-        return log.actorNode === nodeId;
-      }
-      if (log.eventType === 'PAYMENT_INITIATED') {
-        return log.actorNode === nodeId;
-      }
-      if (log.eventType === 'PAYMENT_APPROVED' || log.eventType === 'PAYMENT_REJECTED') {
-        return log.actorNode === nodeId;
-      }
-      if (log.eventType === 'PAYMENT_VERIFIED') {
-        return false;
-      }
-      return true;
-    });
-  }, [displayedLogs, user?.nodeId, isMerchantView]);
+    if (idFilter.trim()) {
+      const search = idFilter.toLowerCase().trim();
+      logs = logs.filter(log => {
+        const nonce = log.metadata?.nonce?.toLowerCase() || '';
+        return nonce.includes(search);
+      });
+    }
+    
+    return logs;
+  })();
 
   const getLastSeenTime = (nodeId) => {
     const lastSeenTime = lastSeen[nodeId];
@@ -83,7 +95,24 @@ export default function AuditLogTable({ user, onHome, isMerchantView = false }) 
   };
 
   const handleRefresh = () => {
-    fetchAuditLogs(50);
+    fetchAuditLogs(limit);
+  };
+
+  const handleLoadMore = () => {
+    setLimit(prev => prev + 50);
+  };
+
+  const toggleEventFilter = (eventType) => {
+    setSelectedEvents(prev => 
+      prev.includes(eventType)
+        ? prev.filter(e => e !== eventType)
+        : [...prev, eventType]
+    );
+  };
+
+  const clearFilters = () => {
+    setSelectedEvents([]);
+    setIdFilter('');
   };
 
   return (
@@ -126,14 +155,14 @@ export default function AuditLogTable({ user, onHome, isMerchantView = false }) 
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {!isMerchantView && Object.keys(lastSeen).length > 0 && (
+        {Object.keys(lastSeen).length > 0 && (
           <div className="card mb-6">
             <h3 className="text-sm font-semibold text-gray-600 mb-3">Node Status (Last Seen)</h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
               {Object.entries(lastSeen).map(([nodeId, time]) => (
                 <div key={nodeId} className="p-2 bg-gray-50 rounded-lg text-center">
                   <span className="text-sm font-medium text-gray-700">
-                    {nodeId === "99" ? "Merchant Node" : `Node ${nodeId}`}
+                    {nodeId === "99" || nodeId === 99 ? "Merchant Node" : `Node ${nodeId}`}
                   </span>
                   <p className="text-xs text-gray-500 mt-1">{getLastSeenTime(nodeId)}</p>
                 </div>
@@ -144,10 +173,56 @@ export default function AuditLogTable({ user, onHome, isMerchantView = false }) 
 
         <div className="card">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">
-              {isMerchantView ? 'Verification & Transaction Events' : 'Audit Log Events'}
-            </h2>
-            <span className="text-sm text-gray-500">Showing {filteredLogs.length} of {filteredLogs.length} entries</span>
+            <h2 className="text-lg font-semibold text-gray-800">Audit Log Events</h2>
+            <div className="flex items-center gap-3">
+              <input
+                type="text"
+                value={idFilter}
+                onChange={(e) => setIdFilter(e.target.value)}
+                placeholder="Filter by Transaction ID..."
+                className="border border-gray-300 rounded px-3 py-2 text-sm w-48"
+              />
+              <div className="relative">
+                <button
+                  onClick={() => setShowFilter(!showFilter)}
+                  className="text-gray-600 hover:text-gray-800 px-3 py-2 text-sm font-medium flex items-center gap-1 border border-gray-300 rounded"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                  Filter {selectedEvents.length > 0 ? `(${selectedEvents.length})` : ''}
+                </button>
+                
+                {showFilter && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-10 p-3">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium text-gray-700">Event Types</span>
+                      <button
+                        onClick={() => setSelectedEvents([])}
+                        className="text-xs text-primary-600 hover:text-primary-800"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {ALL_EVENT_TYPES.map(eventType => (
+                        <label key={eventType} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedEvents.length === 0 || selectedEvents.includes(eventType)}
+                            onChange={() => toggleEventFilter(eventType)}
+                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          />
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${EVENT_TYPE_COLORS[eventType]}`}>
+                            {eventType}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
           
           {filteredLogs.length === 0 ? (
@@ -162,6 +237,9 @@ export default function AuditLogTable({ user, onHome, isMerchantView = false }) 
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Event Type
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Transaction ID
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Description
@@ -182,12 +260,21 @@ export default function AuditLogTable({ user, onHome, isMerchantView = false }) 
                           {log.eventType}
                         </span>
                       </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 font-mono">
+                        {log.metadata?.nonce ? (
+                          <span className="text-xs">{log.metadata.nonce.slice(0, 8)}...</span>
+                        ) : (
+                          <span className="text-gray-300">-</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-sm text-gray-800">
                         {log.description}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">
                         {log.actorNode ? (
-                          <span className="badge bg-primary-50 text-primary-700">Node {log.actorNode}</span>
+                          <span className="badge bg-primary-50 text-primary-700">
+                            {log.actorNode === 99 ? 'Merchant Node' : `Node ${log.actorNode}`}
+                          </span>
                         ) : log.eventType === 'PAYMENT_VERIFIED' ? (
                           <span className="badge bg-purple-50 text-purple-700">Merchant</span>
                         ) : (
@@ -198,6 +285,17 @@ export default function AuditLogTable({ user, onHome, isMerchantView = false }) 
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {hasMore && filteredLogs.length > 0 && (
+            <div className="mt-4 text-center">
+              <button
+                onClick={handleLoadMore}
+                className="btn-primary"
+              >
+                Load More
+              </button>
             </div>
           )}
         </div>

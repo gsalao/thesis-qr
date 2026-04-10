@@ -31,6 +31,13 @@ function startExpirationChecker(io) {
         tx.status = 'EXPIRED';
         await tx.save();
         
+        await createAuditLog(
+          'QR_EXPIRED',
+          `${formatPHP(tx.amount)} payment expired - QR code no longer valid`,
+          tx.requesterId,
+          { nonce: tx.nonce, amount: tx.amount }
+        );
+        
         // Remove from memory if present
         pendingTransactions.delete(tx.nonce);
 
@@ -88,6 +95,10 @@ function formatPHP(amount) {
   return `₱${amount.toLocaleString()}`;
 }
 
+function formatNodeName(nodeId) {
+  return nodeId === 99 ? 'Merchant Node' : `Node ${nodeId}`;
+}
+
 async function createAuditLog(eventType, description, actorNode = null, metadata = {}) {
   try {
     const logEntry = new AuditLog({
@@ -131,16 +142,6 @@ function startLastSeenUpdater(socket) {
     const now = new Date();
     for (const [nodeId, socketData] of activeNodes) {
       lastSeenMap.set(nodeId, now.toISOString());
-      
-      const existingLog = await AuditLog.findOne({ 
-        actorNode: nodeId, 
-        eventType: 'NODE_ONLINE',
-        timestamp: { $gt: new Date(now.getTime() - 60000) }
-      });
-      
-      if (!existingLog) {
-        await createAuditLog('NODE_ONLINE', `Node ${nodeId} is online`, nodeId, { status: 'active' });
-      }
     }
     
     broadcastAuditLogs();
@@ -197,7 +198,7 @@ export function handleSocketConnection(io, socket) {
     console.log(`Node ${nodeId} (${role}) joined`);
     
     if (role !== 'merchant') {
-      await createAuditLog('NODE_ONLINE', `Node ${nodeId} came online`, nodeId, { role });
+      await createAuditLog('NODE_ONLINE', `${formatNodeName(nodeId)} came online`, nodeId, { role });
     }
 
     broadcastOccupiedNodes(io);
@@ -234,7 +235,7 @@ export function handleSocketConnection(io, socket) {
       console.log(`Node ${nodeId} left the room (logout)`);
       
       if (role !== 'merchant') {
-        createAuditLog('NODE_OFFLINE', `Node ${nodeId} went offline`, nodeId, { role });
+        createAuditLog('NODE_OFFLINE', `${formatNodeName(nodeId)} went offline`, nodeId, { role });
       }
       
       broadcastOccupiedNodes(io);
@@ -370,7 +371,7 @@ export function handleSocketConnection(io, socket) {
     
     await createAuditLog(
       'PAYMENT_INITIATED',
-      `${formatPHP(amount)} payment initiated by Node ${requesterId}`,
+      `${formatPHP(amount)} payment initiated by ${formatNodeName(requesterId)}`,
       requesterId,
       { nonce, amount, threshold }
     );
@@ -441,7 +442,7 @@ export function handleSocketConnection(io, socket) {
     
     await createAuditLog(
       'PAYMENT_APPROVED',
-      `Payment approved by Node ${nodeId} (${currentCount}/${requiredThreshold})`,
+      `Payment approved by ${formatNodeName(nodeId)} (${currentCount}/${requiredThreshold})`,
       nodeId,
       { nonce, amount: transaction.amount, threshold: requiredThreshold, collectedCount: currentCount }
     );
@@ -654,6 +655,13 @@ export function handleSocketConnection(io, socket) {
       transaction.status = 'CANCELLED';
       await transaction.save();
       
+      await createAuditLog(
+        'PAYMENT_CANCELLED',
+        `${formatPHP(transaction.amount)} payment cancelled by ${formatNodeName(requesterId)}`,
+        requesterId,
+        { nonce: transaction.nonce, amount: transaction.amount }
+      );
+      
       // Remove from pending map if it exists there
       pendingTransactions.delete(nonce);
 
@@ -694,7 +702,7 @@ export function handleSocketConnection(io, socket) {
       
       await createAuditLog(
         'PAYMENT_REJECTED',
-        `Payment rejected by Node ${nodeId}`,
+        `Payment rejected by ${formatNodeName(nodeId)}`,
         nodeId,
         { nonce, amount: transaction.amount }
       );
@@ -710,6 +718,13 @@ export function handleSocketConnection(io, socket) {
         transaction.status = 'FAILED';
         await transaction.save();
         pendingTransactions.delete(nonce);
+
+        await createAuditLog(
+          'THRESHOLD_NOT_MET',
+          `Payment of ${formatPHP(transaction.amount)} declined - too many rejections`,
+          transaction.requesterId,
+          { nonce: transaction.nonce, amount: transaction.amount, rejectedBy: transaction.rejectedBy }
+        );
 
         io.emit('transaction_denied', {
           nonce: transaction.nonce,
