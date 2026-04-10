@@ -9,6 +9,18 @@ const pendingTransactions = new Map();
 const SERVER_START_TIME = new Date();
 let expirationCheckerStarted = false;
 
+const transactionLocks = new Map();
+async function withLock(nonce, fn) {
+  const prior = transactionLocks.get(nonce) || Promise.resolve();
+  const next = prior.catch(() => {}).then(fn);
+  transactionLocks.set(nonce, next);
+  try {
+    return await next;
+  } finally {
+    if (transactionLocks.get(nonce) === next) transactionLocks.delete(nonce);
+  }
+}
+
 function startExpirationChecker(io) {
   if (expirationCheckerStarted) return;
   expirationCheckerStarted = true;
@@ -269,7 +281,9 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('submit_share', async (data) => {
     const { nonce, nodeId, signature } = data;
-    console.log(`submit_share received from Node ${nodeId} for nonce ${nonce}`);
+    try {
+      await withLock(nonce, async () => {
+        console.log(`submit_share received from Node ${nodeId} for nonce ${nonce}`);
 
     let transaction = pendingTransactions.get(nonce);
     if (!transaction) {
@@ -383,13 +397,17 @@ export function handleSocketConnection(io, socket) {
 
         socket.emit('error', { message: 'Failed to aggregate signatures' });
       }
-    } else {
-      socket.emit('share_submitted', {
-        success: true,
-        completed: false,
-        collectedCount: currentCount,
-        requiredThreshold
-      });
+      } else {
+        socket.emit('share_submitted', {
+          success: true,
+          completed: false,
+          collectedCount: currentCount,
+          requiredThreshold
+        });
+      }
+    }); // end withLock
+    } catch (e) {
+      console.error('Unhandled error in submit_share lock:', e);
     }
   });
 
@@ -414,7 +432,9 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('verify_payment', async (data) => {
     const { nonce, amount } = data;
-    console.log(`Payment verification request from merchant for transaction ${nonce}, amount: ${amount}`);
+    try {
+      await withLock(nonce, async () => {
+        console.log(`Payment verification request from merchant for transaction ${nonce}, amount: ${amount}`);
 
     let transaction = await Transaction.findOne({ nonce });
     
@@ -458,19 +478,25 @@ export function handleSocketConnection(io, socket) {
     const newBalance = await deductBalance(amount);
     broadcastToNodes(io, 'balance_update', { balance: newBalance });
 
-    broadcastToNodes(io, 'payment_received', {
-      nonce,
-      amount,
-      timestamp: Date.now(),
-      verifiedBy: 'merchant'
-    });
-    
-    socket.emit('payment_processed', { success: true, nonce });
+        broadcastToNodes(io, 'payment_received', {
+          nonce,
+          amount,
+          timestamp: Date.now(),
+          verifiedBy: 'merchant'
+        });
+        
+        socket.emit('payment_processed', { success: true, nonce });
+      });
+    } catch (e) {
+      console.error('Unhandled error in verify_payment lock:', e);
+    }
   });
 
   socket.on('cancel_transaction', async (data) => {
     const { nonce, requesterId } = data;
-    console.log(`Transaction cancellation request from Node ${requesterId} for nonce ${nonce}`);
+    try {
+      await withLock(nonce, async () => {
+        console.log(`Transaction cancellation request from Node ${requesterId} for nonce ${nonce}`);
 
     try {
       const transaction = await Transaction.findOne({ nonce });
@@ -500,16 +526,22 @@ export function handleSocketConnection(io, socket) {
       // Broadcast to everyone to remove it from their UI
       io.emit('transaction_cancelled', { nonce, requesterId });
       
-      console.log(`Transaction ${nonce} cancelled by requester ${requesterId}`);
-    } catch (error) {
-      console.error('Error cancelling transaction:', error);
-      socket.emit('error', { message: 'Failed to cancel transaction.' });
+          console.log(`Transaction ${nonce} cancelled by requester ${requesterId}`);
+        } catch (error) {
+          console.error('Error cancelling transaction:', error);
+          socket.emit('error', { message: 'Failed to cancel transaction.' });
+        }
+      });
+    } catch (e) {
+      console.error('Unhandled error in cancel_transaction lock:', e);
     }
   });
 
   socket.on('reject_share', async (data) => {
     const { nonce, nodeId, signature } = data;
-    let transaction = pendingTransactions.get(nonce);
+    try {
+      await withLock(nonce, async () => {
+        let transaction = pendingTransactions.get(nonce);
     if (!transaction) {
       transaction = await Transaction.findOne({ nonce });
       if (!transaction) {
@@ -562,7 +594,11 @@ export function handleSocketConnection(io, socket) {
       return; // Stop execution if database fails
     }
 
-    socket.emit('share_rejected', { nonce: transaction.nonce });
+        socket.emit('share_rejected', { nonce: transaction.nonce });
+      });
+    } catch (e) {
+      console.error('Unhandled error in reject_share lock:', e);
+    }
   });
 
   socket.on('disconnect', () => {
