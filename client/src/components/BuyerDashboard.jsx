@@ -67,6 +67,21 @@ export default function BuyerDashboard({ user, onLogout }) {
   const [selectedQrExpiresAt, setSelectedQrExpiresAt] = useState(null);
   const [selectedTxStatus, setSelectedTxStatus] = useState(null);
   const [showAuditLogs, setShowAuditLogs] = useState(false);
+  const [qrSize, setQrSize] = useState(300);
+
+  useEffect(() => {
+    const updateQrSize = () => {
+      const maxSize = Math.min(window.innerWidth - 40, window.innerHeight - 200);
+      setQrSize(Math.max(200, maxSize));
+    };
+    updateQrSize();
+    window.addEventListener('resize', updateQrSize);
+    window.addEventListener('orientationchange', updateQrSize);
+    return () => {
+      window.removeEventListener('resize', updateQrSize);
+      window.removeEventListener('orientationchange', updateQrSize);
+    };
+  }, []);
 
   const showNotification = useCallback((message, type = 'info') => {
     setNotification({ message, type });
@@ -75,6 +90,7 @@ export default function BuyerDashboard({ user, onLogout }) {
 
   const openQrModal = (qrData, qrExpiresAt, status) => {
     const qrString = JSON.stringify(qrData);
+    console.log('openQrModal qrData:', JSON.stringify(qrData));
     setSelectedQrImage(qrString);
     setSelectedQrExpiresAt(qrExpiresAt);
     setSelectedTxStatus(status);
@@ -584,7 +600,8 @@ export default function BuyerDashboard({ user, onLogout }) {
                           <QRCodeSVG
                             value={JSON.stringify(tx.qrData)}
                             size={140}
-                            level="M"
+                            level="H"
+                            includeMargin={true}
                           />
                           <p className="text-xs text-gray-500 mt-2">Click to view full size</p>
                         </div>
@@ -692,45 +709,43 @@ export default function BuyerDashboard({ user, onLogout }) {
       </main>
 
       {selectedQrImage && (
-        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50" onClick={closeQrModal}>
-          <div className="relative bg-white rounded-2xl p-8 max-w-lg w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black flex flex-col items-center justify-between z-50" onClick={closeQrModal}>
+          <div className="p-4">
             <button
               onClick={closeQrModal}
-              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 bg-gray-100 rounded-full p-2"
+              className="text-white hover:text-gray-300"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <div className="text-center">
-              <h3 className="text-xl font-bold text-gray-800 mb-2">Your Payment QR Code</h3>
-              {selectedTxStatus === 'PAID' ? (
-                <div className="mb-4">
-                  <span className="badge badge-success flex items-center gap-1 text-sm py-2 px-4">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    PAID
-                  </span>
-                </div>
-              ) : (
-                selectedQrExpiresAt && (
-                  <div className="mb-4">
-                    <CountdownBadge expiresAt={selectedQrExpiresAt} />
-                  </div>
-                )
-              )}
-              <p className="text-gray-500 text-sm mb-6">{selectedTxStatus === 'PAID' ? 'Payment completed!' : 'Show this to the merchant'}</p>
-              <div className="bg-white p-4 rounded-xl shadow-lg inline-block">
-                <QRCodeSVG
-                  value={selectedQrImage}
-                  size={280}
-                  level="H"
-                  includeMargin={true}
-                />
-              </div>
-              <p className="text-gray-400 text-sm mt-6">Tap outside to close</p>
+          </div>
+          
+          <div className="text-center px-4">
+            <h3 className="text-2xl font-bold text-white mb-2">Your Payment QR</h3>
+            {selectedTxStatus === 'PAID' ? (
+              <span className="badge badge-success text-base py-2 px-4">PAID</span>
+            ) : selectedQrExpiresAt ? (
+              <CountdownBadge expiresAt={selectedQrExpiresAt} />
+            ) : null}
+            <p className="text-gray-400 text-sm mt-2">{selectedTxStatus === 'PAID' ? 'Completed' : 'Show to merchant'}</p>
+          </div>
+
+          <div className="flex-1 flex items-center justify-center p-4">
+            <div className="bg-white p-2 rounded-lg">
+              <QRCodeSVG
+                value={selectedQrImage}
+                size={qrSize}
+                level="H"
+                includeMargin={true}
+                fgColor="#000000"
+                bgColor="#FFFFFF"
+              />
             </div>
+          </div>
+
+          <div className="p-6">
+            <p className="text-gray-500">Tap anywhere to close</p>
           </div>
         </div>
       )}

@@ -110,29 +110,19 @@ export default function MerchantDashboard({ user, onLogout }) {
           qrbox: { width: 250, height: 250 }
         },
         (decodedText) => {
-          console.log(`QR Code detected: ${decodedText}`);
+          console.log(`QR detected: ${decodedText.substring(0, 80)}...`);
           
+          // Accept any JSON - handleVerify will validate
           try {
-            // Quick check if it's JSON and has our required fields
-            const testData = JSON.parse(decodedText);
-            if (!testData.amount || !testData.nonce || !testData.signature) {
-              throw new Error('Missing payload fields');
-            }
-            
+            JSON.parse(decodedText); // Just validate it's valid JSON
             setQrInput(decodedText);
             stopScanning();
             showNotification('QR Code scanned successfully!', 'success');
           } catch (e) {
-            // Not our system's QR code (e.g., GCash, random URL, etc.)
-            console.warn('Invalid QR scanned:', decodedText);
-            stopScanning();
             setQrInput(decodedText);
-            showNotification('Invalid QR: This code is not from our system.', 'error');
-            
-            setVerificationResult({
-              valid: false,
-              error: 'Invalid QR Code: Source Not Recognized'
-            });
+            showNotification('Invalid QR: Not valid JSON', 'error');
+            setVerificationResult({ valid: false, error: 'Invalid QR Code: Source Not Recognized' });
+            stopScanning();
           }
         },
         (errorMessage) => {
@@ -174,18 +164,47 @@ export default function MerchantDashboard({ user, onLogout }) {
         throw new Error('Invalid QR: Code format not recognized by this system.');
       }
 
-      if (!qrData.amount || !qrData.timestamp || !qrData.nonce || !qrData.signature) {
+      console.log('QR Input received:', JSON.stringify(qrData).substring(0, 100));
+
+      let parsedData;
+      const isMinified = qrData.sx && qrData.sy && qrData.a !== undefined && qrData.n;
+      
+      console.log('Is minified:', isMinified, 'keys:', Object.keys(qrData));
+      
+      if (isMinified) {
+        const base64ToHex = (base64) => {
+          const binary = atob(base64);
+          let hex = '';
+          for (let i = 0; i < binary.length; i++) {
+            hex += binary.charCodeAt(i).toString(16).padStart(2, '0');
+          }
+          return hex;
+        };
+        
+        parsedData = {
+          amount: qrData.a,
+          timestamp: qrData.t * 1000,
+          nonce: qrData.n,
+          signature: {
+            x: base64ToHex(qrData.sx),
+            y: base64ToHex(qrData.sy)
+          }
+        };
+      } else {
+        parsedData = qrData;
+      }
+
+      console.log('Parsed data:', JSON.stringify(parsedData));
+
+      if (!parsedData.amount || !parsedData.timestamp || !parsedData.nonce || !parsedData.signature?.x || !parsedData.signature?.y) {
         throw new Error('Invalid QR: Missing system-required payload fields.');
       }
 
-      // The actual cryptographic verification happens on the server via 'verify_payment'
-      // but we still want to show a verification state in the UI.
-      
       const result = {
         valid: true, 
-        amount: qrData.amount,
-        timestamp: qrData.timestamp,
-        nonce: qrData.nonce,
+        amount: parsedData.amount,
+        timestamp: parsedData.timestamp,
+        nonce: parsedData.nonce,
         time: new Date().toLocaleString()
       };
 
@@ -193,8 +212,8 @@ export default function MerchantDashboard({ user, onLogout }) {
       
       showNotification('QR Payload Validated!', 'success');
       socket.emit('verify_payment', {
-        nonce: qrData.nonce,
-        amount: qrData.amount
+        nonce: parsedData.nonce,
+        amount: parsedData.amount
       });
 
     } catch (error) {

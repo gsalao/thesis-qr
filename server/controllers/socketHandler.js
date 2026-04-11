@@ -107,6 +107,37 @@ function formatPHP(amount) {
   return `₱${amount.toLocaleString()}`;
 }
 
+function minifyQrData(qrData) {
+  console.log('minifyQrData input:', JSON.stringify(qrData));
+  
+  const sig = qrData.signature;
+  console.log('Signature x:', sig.x, 'y:', sig.y);
+  
+  const hexToBase64 = (hex) => {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    let binary = '';
+    bytes.forEach(b => binary += String.fromCharCode(b));
+    return btoa(binary);
+  };
+  
+  const sx = hexToBase64(sig.x);
+  const sy = hexToBase64(sig.y);
+  console.log('Base64 sx:', sx, 'sy:', sy);
+  
+  const result = {
+    a: qrData.amount,
+    t: Math.floor(qrData.timestamp / 1000),
+    n: qrData.nonce,
+    sx,
+    sy
+  };
+  console.log('minifyQrData output:', JSON.stringify(result));
+  return result;
+}
+
 function formatNodeName(nodeId) {
   return nodeId === 99 ? 'Merchant Node' : `Node ${nodeId}`;
 }
@@ -329,7 +360,7 @@ export function handleSocketConnection(io, socket) {
         
         transaction.status = 'COMPLETED';
         transaction.aggregatedSignature = aggregated;
-        transaction.qrData = { amount, timestamp, nonce, signature: aggregated };
+        transaction.qrData = minifyQrData({ amount, timestamp, nonce, signature: aggregated });
         transaction.qrExpiresAt = new Date(Date.now() + 2 * 60 * 1000);
         await transaction.save();
         
@@ -477,12 +508,12 @@ export function handleSocketConnection(io, socket) {
         const aggregated = aggregateSignatures(signatures, signers);
         console.log(`Aggregation successful:`, aggregated);
 
-        const qrData = {
+        const qrData = minifyQrData({
           amount: transaction.amount,
           timestamp: transaction.createdAt.getTime(),
           nonce: transaction.nonce,
           signature: aggregated
-        };
+        });
 
         transaction.status = 'COMPLETED';
         transaction.aggregatedSignature = aggregated;
@@ -526,6 +557,8 @@ export function handleSocketConnection(io, socket) {
           signers: signers,
           verificationResult: isValid
         };
+
+        console.log('Sending completionData with qrData:', JSON.stringify(qrData));
 
         broadcastToNodes(io, 'transaction_completed', {
           ...completionData,

@@ -26,16 +26,7 @@ const TransactionSchema = new mongoose.Schema({
     y: String,
     z: String
   },
-  qrData: {
-    amount: Number,
-    timestamp: Number,
-    nonce: String,
-    signature: {
-      x: String,
-      y: String,
-      z: String
-    }
-  },
+  qrData: mongoose.Schema.Types.Mixed,
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   expiresAt: { type: Date },
