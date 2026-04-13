@@ -1,4 +1,6 @@
 import { io } from 'socket.io-client';
+import { signMessage } from './utils/cryptoUtils.js';
+import { PRIVATE_SHARES } from './config/keys.js';
 
 const URL = 'http://localhost:5001';
 console.log(`Connecting to ${URL}...`);
@@ -7,9 +9,6 @@ const socket = io(URL);
 
 socket.on('connect', () => {
   console.log('Connected to server. Initiating a new transaction...');
-
-  // Step 1: Create a real transaction to give us a valid 'nonce'
-  // Threshold will be low (<1000 amount typically)
   socket.emit('request_transaction', { amount: 5000, requesterId: 1 });
 });
 
@@ -19,23 +18,24 @@ socket.on('transaction_initiated', async (data) => {
     process.exit(0);
   }
 
-  const { nonce } = data;
+  const { nonce, amount, timestamp } = data;
   console.log(`\n✅ Transaction initiated successfully. Nonce received: ${nonce}`);
-  console.log('Now immediately blasting the server with simultaneous approvals from multiple fake nodes...');
+  console.log('Now immediately blasting the server with simultaneous approvals with REAL signatures...');
 
-  // Step 2: Blast `submit_share` exactly at the same time to force a race condition
   const spamRequests = [];
+  const messageToSign = { amount, timestamp, nonce };
 
   for (let i = 2; i <= 5; i++) {
     spamRequests.push(new Promise((resolve) => {
       console.log(`Node ${i} is approving...`);
+      
+      const privateShare = PRIVATE_SHARES[i];
+      const realSignature = signMessage(messageToSign, privateShare);
+
       socket.emit('submit_share', {
         nonce: nonce,
         nodeId: i,
-        // using fake signatures to trigger parallel saves. 
-        // the aggregation might fail with 'Failed to aggregate signatures', 
-        // but that's fine, we are testing the database/lock.
-        signature: { x: '1', y: '2' }
+        signature: realSignature
       });
       resolve();
     }));
