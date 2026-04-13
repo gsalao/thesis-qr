@@ -9,6 +9,18 @@ const pendingTransactions = new Map();
 const SERVER_START_TIME = new Date();
 let expirationCheckerStarted = false;
 
+const transactionLocks = new Map();
+async function withLock(nonce, fn) {
+  const prior = transactionLocks.get(nonce) || Promise.resolve();
+  const next = prior.catch(() => {}).then(fn);
+  transactionLocks.set(nonce, next);
+  try {
+    return await next;
+  } finally {
+    if (transactionLocks.get(nonce) === next) transactionLocks.delete(nonce);
+  }
+}
+
 function startExpirationChecker(io) {
   if (expirationCheckerStarted) return;
   expirationCheckerStarted = true;
@@ -19,7 +31,7 @@ function startExpirationChecker(io) {
       const now = new Date();
       // Find pending and completed transactions that have passed their expiresAt
       const expiredTxs = await Transaction.find({
-        status: { $in: ['PENDING', 'COMPLETED'] },
+        status: { $in: ['PENDING', 'COMPLETING', 'COMPLETED'] },
         expiresAt: { $lt: now }
       });
 
@@ -73,11 +85,15 @@ async function getGroupBalance() {
 }
 
 async function deductBalance(amount) {
-  const balance = await getGroupBalance();
-  balance.balance -= amount;
-  balance.lastUpdated = new Date();
-  await balance.save();
-  return balance.balance;
+  const result = await GroupBalance.findOneAndUpdate(
+    { _id: 'joint-account' },
+    { $inc: { balance: -amount }, $set: { lastUpdated: new Date() } },
+    { new: true, upsert: false }
+  );
+  if (!result) {
+    throw new Error('Joint account not found for balance deduction');
+  }
+  return result.balance;
 }
 
 export async function initializeBalance() {
@@ -144,8 +160,32 @@ export function handleSocketConnection(io, socket) {
       requesterId: tx.requesterId,
       collectedCount: tx.collectedSignatures.length,
       threshold: tx.threshold,
-      timestamp: tx.createdAt.getTime()
+      timestamp: tx.createdAt.getTime(),
+      expiresAt: tx.expiresAt ? tx.expiresAt.toISOString() : null,
+      rejectedBy: tx.rejectedBy || []
     })));
+
+    // Send the user's COMPLETED transactions so QR codes are restored on reconnect
+    const myCompleted = await Transaction.find({
+      requesterId: nodeId,
+      status: { $in: ['COMPLETED', 'PAID'] }
+    }).sort({ createdAt: -1 });
+
+    if (myCompleted.length > 0) {
+      socket.emit('my_completed_transactions', myCompleted.map(tx => ({
+        nonce: tx.nonce,
+        amount: tx.amount,
+        requesterId: tx.requesterId,
+        status: tx.status,
+        threshold: tx.threshold,
+        collectedCount: tx.collectedSignatures.length,
+        signers: tx.collectedSignatures.map(s => s.nodeId),
+        qrData: tx.qrData,
+        expiresAt: tx.expiresAt ? tx.expiresAt.toISOString() : null,
+        qrExpiresAt: tx.qrExpiresAt ? tx.qrExpiresAt.toISOString() : null,
+        timestamp: tx.createdAt.getTime()
+      })));
+    }
   });
 
   socket.on('leave_room', () => {
@@ -261,6 +301,7 @@ export function handleSocketConnection(io, socket) {
       amount,
       threshold,
       status: 'PENDING',
+      timestamp,
       expiresAt: transaction.expiresAt.toISOString(),
       collectedCount: transaction.collectedSignatures.length,
       message: `Transaction initiated. Requires ${threshold} signatures (1/${threshold} collected)`
@@ -269,127 +310,167 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('submit_share', async (data) => {
     const { nonce, nodeId, signature } = data;
-    console.log(`submit_share received from Node ${nodeId} for nonce ${nonce}`);
+    try {
+      await withLock(nonce, async () => {
+        console.log(`submit_share received from Node ${nodeId} for nonce ${nonce}`);
 
-    let transaction = pendingTransactions.get(nonce);
-    if (!transaction) {
-      transaction = await Transaction.findOne({ nonce });
-      if (!transaction) {
-        socket.emit('error', { message: 'Transaction not found' });
-        return;
-      }
-    }
+        // STEP 1: Atomic push — only succeeds if:
+        //   - the transaction exists with this nonce
+        //   - status is still PENDING
+        //   - this nodeId hasn't signed yet ($ne guard)
+        //   - the transaction hasn't expired
+        const updated = await Transaction.findOneAndUpdate(
+          {
+            nonce,
+            status: 'PENDING',
+            'collectedSignatures.nodeId': { $ne: nodeId },
+            expiresAt: { $gt: new Date() }
+          },
+          {
+            $push: { collectedSignatures: { nodeId, signature, timestamp: new Date() } },
+            $set: { updatedAt: new Date() }
+          },
+          { new: true }
+        );
 
-    console.log(`Transaction found: ${transaction._id}, status: ${transaction.status}`);
+        // If the atomic push returned null, figure out why and inform the caller
+        if (!updated) {
+          const existing = await Transaction.findOne({ nonce });
+          if (!existing) {
+            socket.emit('error', { message: 'Transaction not found' });
+          } else if (existing.status === 'COMPLETED' || existing.status === 'COMPLETING') {
+            socket.emit('share_submitted', { success: true, alreadyCompleted: true });
+          } else if (existing.expiresAt && new Date() > existing.expiresAt) {
+            socket.emit('share_rejected', { nonce, message: 'Transaction has expired' });
+          } else if (existing.collectedSignatures.some(s => s.nodeId === nodeId)) {
+            socket.emit('error', { message: 'Node already signed this transaction' });
+          } else {
+            socket.emit('error', { message: `Cannot sign transaction with status: ${existing.status}` });
+          }
+          return;
+        }
 
-    if (transaction.expiresAt && new Date() > transaction.expiresAt) {
-      socket.emit('share_rejected', { nonce, message: 'Transaction has expired' });
-      return;
-    }
+        const requiredThreshold = updated.threshold;
+        const currentCount = updated.collectedSignatures.length;
 
-    if (transaction.status === 'COMPLETED') {
-      socket.emit('share_submitted', { success: true, alreadyCompleted: true });
-      return;
-    }
+        console.log(`Signature received from Node ${nodeId} for ${nonce} (${currentCount}/${requiredThreshold})`);
 
-    const existingSig = transaction.collectedSignatures.find(s => s.nodeId === nodeId);
-    if (existingSig) {
-      socket.emit('error', { message: 'Node already signed this transaction' });
-      return;
-    }
-
-    transaction.collectedSignatures.push({
-      nodeId,
-      signature
-    });
-    await transaction.save();
-
-    const requiredThreshold = transaction.threshold;
-    const currentCount = transaction.collectedSignatures.length;
-
-    console.log(`Signature received from Node ${nodeId} for ${nonce} (${currentCount}/${requiredThreshold})`);
-
-    broadcastToNodes(io, 'signature_received', {
-      nonce,
-      nodeId,
-      collectedCount: currentCount,
-      threshold: requiredThreshold
-    });
-
-    if (currentCount >= requiredThreshold) {
-      try {
-        const signers = transaction.collectedSignatures.map(s => s.nodeId);
-        const signatures = transaction.collectedSignatures.map(s => s.signature);
-        console.log(`Aggregating ${signatures.length} signatures from signers: ${signers}`);
-
-        const aggregated = aggregateSignatures(signatures, signers);
-        console.log(`Aggregation successful:`, aggregated);
-
-        const qrData = {
-          amount: transaction.amount,
-          timestamp: transaction.createdAt.getTime(),
-          nonce: transaction.nonce,
-          signature: aggregated
-        };
-
-        transaction.status = 'COMPLETED';
-        transaction.aggregatedSignature = aggregated;
-        transaction.qrData = qrData;
-        transaction.qrExpiresAt = new Date(Date.now() + 2 * 60 * 1000);
-        await transaction.save();
-
-        const messageToVerify = {
-          amount: transaction.amount,
-          timestamp: transaction.createdAt.getTime(),
-          nonce: transaction.nonce
-        };
-
-        const isValid = verifySignature(JOINT_PUBLIC_KEY, messageToVerify, aggregated);
-
-        console.log(`Transaction ${nonce} completed. Verification: ${isValid}`);
-
-        const completionData = {
-          success: true,
-          nonce: transaction.nonce,
-          amount: transaction.amount,
-          expiresAt: transaction.expiresAt.toISOString(),
-          qrExpiresAt: transaction.qrExpiresAt.toISOString(),
-          qrData,
-          signers: signers,
-          verificationResult: isValid
-        };
-
-        broadcastToNodes(io, 'transaction_completed', {
-          ...completionData,
-          isForRequester: false
+        // Broadcast signature progress to all nodes
+        broadcastToNodes(io, 'signature_received', {
+          nonce,
+          nodeId,
+          collectedCount: currentCount,
+          threshold: requiredThreshold
         });
 
-        sendToNode(io, transaction.requesterId, 'transaction_completed', {
-          ...completionData,
-          isForRequester: true,
-          status: 'COMPLETED'
-        });
+        if (currentCount >= requiredThreshold) {
+          // STEP 2: Atomically claim the "completer" role.
+          // Only one node can transition PENDING → COMPLETING.
+          const claimed = await Transaction.findOneAndUpdate(
+            { nonce, status: 'PENDING' },
+            { $set: { status: 'COMPLETING' } },
+            { new: true }
+          );
 
-        socket.emit('share_submitted', {
-          success: true,
-          completed: true,
-          qrData
-        });
+          if (!claimed) {
+            // Another concurrent request already claimed it
+            console.log(`Node ${nodeId}: threshold met but another node is already completing ${nonce}`);
+            socket.emit('share_submitted', { success: true, alreadyCompleted: true });
+            return;
+          }
 
-      } catch (error) {
-        console.error('Aggregation error:', error);
-        transaction.status = 'FAILED';
-        await transaction.save();
+          // This node won the race — proceed with aggregation
+          try {
+            const signers = claimed.collectedSignatures.map(s => s.nodeId);
+            const signatures = claimed.collectedSignatures.map(s => s.signature);
+            console.log(`Aggregating ${signatures.length} signatures from signers: ${signers}`);
 
-        socket.emit('error', { message: 'Failed to aggregate signatures' });
-      }
-    } else {
-      socket.emit('share_submitted', {
-        success: true,
-        completed: false,
-        collectedCount: currentCount,
-        requiredThreshold
-      });
+            const aggregated = aggregateSignatures(signatures, signers);
+            console.log(`Aggregation successful:`, aggregated);
+
+            const qrData = {
+              amount: claimed.amount,
+              timestamp: claimed.createdAt.getTime(),
+              nonce: claimed.nonce,
+              signature: aggregated
+            };
+
+            // Finalize: COMPLETING → COMPLETED with all aggregation results
+            await Transaction.updateOne(
+              { nonce, status: 'COMPLETING' },
+              {
+                $set: {
+                  status: 'COMPLETED',
+                  aggregatedSignature: aggregated,
+                  qrData: qrData,
+                  qrExpiresAt: new Date(Date.now() + 2 * 60 * 1000),
+                  updatedAt: new Date()
+                }
+              }
+            );
+
+            // Remove from pending map if present
+            pendingTransactions.delete(nonce);
+
+            const messageToVerify = {
+              amount: claimed.amount,
+              timestamp: claimed.createdAt.getTime(),
+              nonce: claimed.nonce
+            };
+
+            const isValid = verifySignature(JOINT_PUBLIC_KEY, messageToVerify, aggregated);
+            console.log(`Transaction ${nonce} completed. Verification: ${isValid}`);
+
+            const completionData = {
+              success: true,
+              nonce: claimed.nonce,
+              amount: claimed.amount,
+              expiresAt: claimed.expiresAt.toISOString(),
+              qrExpiresAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+              qrData,
+              signers: signers,
+              verificationResult: isValid
+            };
+
+            broadcastToNodes(io, 'transaction_completed', {
+              ...completionData,
+              isForRequester: false
+            }, claimed.requesterId);
+
+            sendToNode(io, claimed.requesterId, 'transaction_completed', {
+              ...completionData,
+              isForRequester: true,
+              status: 'COMPLETED'
+            });
+
+            socket.emit('share_submitted', {
+              success: true,
+              completed: true,
+              qrData
+            });
+
+          } catch (error) {
+            console.error('Aggregation error:', error);
+            // Roll back: COMPLETING → FAILED
+            await Transaction.updateOne(
+              { nonce, status: 'COMPLETING' },
+              { $set: { status: 'FAILED', updatedAt: new Date() } }
+            );
+            pendingTransactions.delete(nonce);
+
+            socket.emit('error', { message: 'Failed to aggregate signatures' });
+          }
+        } else {
+          socket.emit('share_submitted', {
+            success: true,
+            completed: false,
+            collectedCount: currentCount,
+            requiredThreshold
+          });
+        }
+      }); // end withLock
+    } catch (e) {
+      console.error('Unhandled error in submit_share lock:', e);
     }
   });
 
@@ -414,7 +495,9 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('verify_payment', async (data) => {
     const { nonce, amount } = data;
-    console.log(`Payment verification request from merchant for transaction ${nonce}, amount: ${amount}`);
+    try {
+      await withLock(nonce, async () => {
+        console.log(`Payment verification request from merchant for transaction ${nonce}, amount: ${amount}`);
 
     let transaction = await Transaction.findOne({ nonce });
     
@@ -458,19 +541,25 @@ export function handleSocketConnection(io, socket) {
     const newBalance = await deductBalance(amount);
     broadcastToNodes(io, 'balance_update', { balance: newBalance });
 
-    broadcastToNodes(io, 'payment_received', {
-      nonce,
-      amount,
-      timestamp: Date.now(),
-      verifiedBy: 'merchant'
-    });
-    
-    socket.emit('payment_processed', { success: true, nonce });
+        broadcastToNodes(io, 'payment_received', {
+          nonce,
+          amount,
+          timestamp: Date.now(),
+          verifiedBy: 'merchant'
+        });
+        
+        socket.emit('payment_processed', { success: true, nonce });
+      });
+    } catch (e) {
+      console.error('Unhandled error in verify_payment lock:', e);
+    }
   });
 
   socket.on('cancel_transaction', async (data) => {
     const { nonce, requesterId } = data;
-    console.log(`Transaction cancellation request from Node ${requesterId} for nonce ${nonce}`);
+    try {
+      await withLock(nonce, async () => {
+        console.log(`Transaction cancellation request from Node ${requesterId} for nonce ${nonce}`);
 
     try {
       const transaction = await Transaction.findOne({ nonce });
@@ -500,69 +589,72 @@ export function handleSocketConnection(io, socket) {
       // Broadcast to everyone to remove it from their UI
       io.emit('transaction_cancelled', { nonce, requesterId });
       
-      console.log(`Transaction ${nonce} cancelled by requester ${requesterId}`);
-    } catch (error) {
-      console.error('Error cancelling transaction:', error);
-      socket.emit('error', { message: 'Failed to cancel transaction.' });
+          console.log(`Transaction ${nonce} cancelled by requester ${requesterId}`);
+        } catch (error) {
+          console.error('Error cancelling transaction:', error);
+          socket.emit('error', { message: 'Failed to cancel transaction.' });
+        }
+      });
+    } catch (e) {
+      console.error('Unhandled error in cancel_transaction lock:', e);
     }
   });
 
   socket.on('reject_share', async (data) => {
     const { nonce, nodeId, signature } = data;
-    let transaction = pendingTransactions.get(nonce);
-    if (!transaction) {
-      transaction = await Transaction.findOne({ nonce });
-      if (!transaction) {
-        socket.emit('error', { message: 'Transaction not found' });
-        return;
-      }
-    }
-    console.log(`Transaction found: ${transaction._id}, status: ${transaction.status}`);
-
-    // UPDATE DB
     try {
-      // 1. Permanently update the status in your MongoDB database
-      await Transaction.updateOne({ nonce }, { $addToSet : {rejectedBy : nodeId} });
-      
-      // Update the memory map so the server knows this node rejected it
-      if (!transaction.rejectedBy) transaction.rejectedBy = [];
-      if (!transaction.rejectedBy.includes(nodeId)) {
-        transaction.rejectedBy.push(nodeId);
-      }
-      
-      console.log(`Node ${nodeId} rejected transaction ${nonce}. Total rejections: ${transaction.rejectedBy.length}`);
+      await withLock(nonce, async () => {
+        // Atomically add rejection — $addToSet prevents duplicates
+        const transaction = await Transaction.findOneAndUpdate(
+          { nonce, status: 'PENDING' },
+          { $addToSet: { rejectedBy: nodeId }, $set: { updatedAt: new Date() } },
+          { new: true }
+        );
 
-      // Check if it's still possible to meet the threshold
-      // Total nodes = 5. 
-      // Remaining possible signers = Total Nodes - Nodes who rejected
-      const totalNodes = 5;
-      const possibleSigners = totalNodes - transaction.rejectedBy.length;
-      
-      if (possibleSigners < transaction.threshold) {
-        console.log(`Transaction ${nonce} is now impossible to complete. Marking as FAILED.`);
-        transaction.status = 'FAILED';
-        await transaction.save();
-        pendingTransactions.delete(nonce);
+        if (!transaction) {
+          const existing = await Transaction.findOne({ nonce });
+          if (!existing) {
+            socket.emit('error', { message: 'Transaction not found' });
+          } else {
+            socket.emit('error', { message: `Cannot reject transaction with status: ${existing.status}` });
+          }
+          return;
+        }
 
-        io.emit('transaction_denied', {
-          nonce: transaction.nonce,
-          requesterId: transaction.requesterId,
-          reason: 'Too many rejections'
+        console.log(`Node ${nodeId} rejected transaction ${nonce}. Total rejections: ${transaction.rejectedBy.length}`);
+
+        // Check if it's still possible to meet the threshold
+        // Total nodes = 5.
+        // Remaining possible signers = Total Nodes - Nodes who rejected
+        const totalNodes = 5;
+        const possibleSigners = totalNodes - transaction.rejectedBy.length;
+
+        if (possibleSigners < transaction.threshold) {
+          console.log(`Transaction ${nonce} is now impossible to complete. Marking as FAILED.`);
+          await Transaction.updateOne(
+            { nonce, status: 'PENDING' },
+            { $set: { status: 'FAILED', updatedAt: new Date() } }
+          );
+          pendingTransactions.delete(nonce);
+
+          io.emit('transaction_denied', {
+            nonce: transaction.nonce,
+            requesterId: transaction.requesterId,
+            reason: 'Too many rejections'
+          });
+          return;
+        }
+
+        sendToNode(io, transaction.requesterId, 'share_rejected_notification', {
+          message: `Node ${nodeId} rejected your transaction`,
+          nonce: transaction.nonce
         });
-        return;
-      }
 
-      sendToNode(io, transaction.requesterId, 'share_rejected_notification', {
-        message: `Node ${nodeId} rejected your transaction`,
-        nonce: transaction.nonce
+        socket.emit('share_rejected', { nonce: transaction.nonce });
       });
-    } catch (err) {
-      console.error('Failed to save rejection to DB:', err.message);
-      socket.emit('error', { message: 'Failed to update transaction status' });
-      return; // Stop execution if database fails
+    } catch (e) {
+      console.error('Unhandled error in reject_share lock:', e);
     }
-
-    socket.emit('share_rejected', { nonce: transaction.nonce });
   });
 
   socket.on('disconnect', () => {
