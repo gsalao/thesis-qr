@@ -1,4 +1,4 @@
 .env.example
 .env
 /data/
-/node_modules/
+node_modules/

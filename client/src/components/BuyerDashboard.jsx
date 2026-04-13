@@ -292,6 +292,23 @@ export default function BuyerDashboard({ user, onLogout }) {
       showNotification(`Payment of ₱${data.amount} received by merchant!`, 'success');
     });
 
+    socket.on('my_completed_transactions', (transactions) => {
+      setMyTransactions(prev => {
+        const combined = [...prev];
+        transactions.forEach(tx => {
+          const alreadyExists = combined.find(t => t.nonce === tx.nonce);
+          if (!alreadyExists) {
+            combined.push({
+              ...tx,
+              status: tx.status,
+              signedByMe: tx.signers?.includes(user.nodeId) || false
+            });
+          }
+        });
+        return combined;
+      });
+    });
+
 
     return () => {
       socket.off('room_joined');
@@ -309,6 +326,7 @@ export default function BuyerDashboard({ user, onLogout }) {
       socket.off('error');
       socket.off('share_submitted');
       socket.off('share_rejected_notification');
+      socket.off('my_completed_transactions');
 
     };
   }, [socket, user.nodeId, showNotification]);
