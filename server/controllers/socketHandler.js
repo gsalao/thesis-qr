@@ -301,6 +301,7 @@ export function handleSocketConnection(io, socket) {
       amount,
       threshold,
       status: 'PENDING',
+      timestamp,
       expiresAt: transaction.expiresAt.toISOString(),
       collectedCount: transaction.collectedSignatures.length,
       message: `Transaction initiated. Requires ${threshold} signatures (1/${threshold} collected)`

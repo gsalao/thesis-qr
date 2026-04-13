@@ -7,11 +7,8 @@ console.log(`Connecting to ${URL}...`);
 
 const socket = io(URL);
 
-let initTimestamp;
-
 socket.on('connect', () => {
   console.log('Connected to server. Initiating a new transaction...');
-  initTimestamp = Date.now();
   socket.emit('request_transaction', { amount: 5000, requesterId: 1 });
 });
 
@@ -21,12 +18,12 @@ socket.on('transaction_initiated', async (data) => {
     process.exit(0);
   }
 
-  const { nonce, amount } = data;
+  const { nonce, amount, timestamp } = data;
   console.log(`\n✅ Transaction initiated successfully. Nonce received: ${nonce}`);
   console.log('Now immediately blasting the server with simultaneous approvals with REAL signatures...');
 
   const spamRequests = [];
-  const messageToSign = { amount, timestamp: initTimestamp, nonce };
+  const messageToSign = { amount, timestamp, nonce };
 
   for (let i = 2; i <= 5; i++) {
     spamRequests.push(new Promise((resolve) => {
