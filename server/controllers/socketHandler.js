@@ -1,13 +1,17 @@
 import { v4 as uuidv4 } from 'uuid';
 import Transaction from '../models/Transaction.js';
 import GroupBalance from '../models/GroupBalance.js';
+import AuditLog from '../models/AuditLog.js';
 import { THRESHOLD, JOINT_PUBLIC_KEY, PRIVATE_SHARES } from '../config/keys.js';
 import { aggregateSignatures, verifySignature, signMessage } from '../utils/cryptoUtils.js';
 
 const activeNodes = new Map();
 const pendingTransactions = new Map();
 const SERVER_START_TIME = new Date();
+const lastSeenMap = new Map();
 let expirationCheckerStarted = false;
+let lastSeenIntervalStarted = false;
+let ioInstance = null;
 
 const transactionLocks = new Map();
 async function withLock(nonce, fn) {
@@ -38,6 +42,13 @@ function startExpirationChecker(io) {
       for (const tx of expiredTxs) {
         tx.status = 'EXPIRED';
         await tx.save();
+        
+        await createAuditLog(
+          'QR_EXPIRED',
+          `${formatPHP(tx.amount)} payment expired - QR code no longer valid`,
+          tx.requesterId,
+          { nonce: tx.nonce, amount: tx.amount }
+        );
         
         // Remove from memory if present
         pendingTransactions.delete(tx.nonce);
@@ -96,6 +107,63 @@ async function deductBalance(amount) {
   return result.balance;
 }
 
+function formatPHP(amount) {
+  return `₱${amount.toLocaleString()}`;
+}
+
+function formatNodeName(nodeId) {
+  return nodeId === 99 ? 'Merchant Node' : `Node ${nodeId}`;
+}
+
+async function createAuditLog(eventType, description, actorNode = null, metadata = {}) {
+  try {
+    const logEntry = new AuditLog({
+      eventType,
+      description,
+      actorNode,
+      metadata,
+      timestamp: new Date()
+    });
+    await logEntry.save();
+    
+    if (ioInstance) {
+      ioInstance.emit('audit_log_new', {
+        eventType,
+        timestamp: logEntry.timestamp,
+        actorNode,
+        description,
+        metadata
+      });
+    }
+    
+    return logEntry;
+  } catch (err) {
+    console.error('Failed to create audit log:', err);
+  }
+}
+
+function broadcastAuditLogs() {
+  if (!ioInstance) return;
+  ioInstance.emit('audit_logs_broadcast', {
+    logs: [],
+    lastSeen: Object.fromEntries(lastSeenMap)
+  });
+}
+
+function startLastSeenUpdater(socket) {
+  if (lastSeenIntervalStarted) return;
+  lastSeenIntervalStarted = true;
+  
+  setInterval(async () => {
+    const now = new Date();
+    for (const [nodeId, socketData] of activeNodes) {
+      lastSeenMap.set(nodeId, now.toISOString());
+    }
+    
+    broadcastAuditLogs();
+  }, 30000);
+}
+
 export async function initializeBalance() {
   let balance = await GroupBalance.findById('joint-account');
   if (!balance) {
@@ -116,8 +184,11 @@ function broadcastOccupiedNodes(io) {
 export function handleSocketConnection(io, socket) {
   console.log(`Socket connected: ${socket.id}`);
   
+  ioInstance = io;
+  
   // Initialize the expiration job once
   startExpirationChecker(io);
+  startLastSeenUpdater(socket);
 
   // Send current occupied nodes to the newly connected socket
   socket.emit('occupied_nodes_update', Array.from(activeNodes.keys()));
@@ -138,8 +209,13 @@ export function handleSocketConnection(io, socket) {
     activeNodes.set(nodeId, socket);
     socket.nodeId = nodeId;
     socket.role = role;
+    lastSeenMap.set(nodeId, new Date().toISOString());
 
     console.log(`Node ${nodeId} (${role}) joined`);
+    
+    if (role !== 'merchant') {
+      await createAuditLog('NODE_ONLINE', `${formatNodeName(nodeId)} came online`, nodeId, { role });
+    }
 
     broadcastOccupiedNodes(io);
 
@@ -190,11 +266,18 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('leave_room', () => {
     const nodeId = socket.nodeId;
+    const role = socket.role;
     if (nodeId) {
       activeNodes.delete(nodeId);
+      lastSeenMap.delete(nodeId);
       delete socket.nodeId;
       delete socket.role;
       console.log(`Node ${nodeId} left the room (logout)`);
+      
+      if (role !== 'merchant') {
+        createAuditLog('NODE_OFFLINE', `${formatNodeName(nodeId)} went offline`, nodeId, { role });
+      }
+      
       broadcastOccupiedNodes(io);
     }
   });
@@ -202,6 +285,31 @@ export function handleSocketConnection(io, socket) {
   socket.on('get_balance', async () => {
     const balance = await getGroupBalance();
     socket.emit('balance_update', { balance: balance.balance });
+  });
+
+  socket.on('get_audit_logs', async (data) => {
+    try {
+      const limit = data?.limit || 50;
+      const logs = await AuditLog.find()
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .lean();
+      
+      socket.emit('audit_logs_response', {
+        logs: logs.map(log => ({
+          _id: log._id,
+          eventType: log.eventType,
+          timestamp: log.timestamp,
+          actorNode: log.actorNode,
+          description: log.description,
+          metadata: log.metadata
+        })),
+        lastSeen: Object.fromEntries(lastSeenMap)
+      });
+    } catch (err) {
+      console.error('Failed to fetch audit logs:', err);
+      socket.emit('error', { message: 'Failed to fetch audit logs' });
+    }
   });
 
   socket.on('request_transaction', async (data) => {
@@ -252,6 +360,22 @@ export function handleSocketConnection(io, socket) {
         transaction.qrData = { amount, timestamp, nonce, signature: aggregated };
         transaction.qrExpiresAt = new Date(Date.now() + 2 * 60 * 1000);
         await transaction.save();
+        
+        await createAuditLog(
+          'QR_GENERATED',
+          `QR generated for ${formatPHP(amount)} payment (threshold met)`,
+          requesterId,
+          { nonce, amount, signers }
+        );
+        
+        if (threshold > 1) {
+          await createAuditLog(
+            'THRESHOLD_REACHED',
+            `Signature threshold (${threshold}) reached for ${formatPHP(amount)}`,
+            requesterId,
+            { nonce, amount, threshold, signers }
+          );
+        }
 
         socket.emit('transaction_initiated', {
           success: true,
@@ -284,6 +408,13 @@ export function handleSocketConnection(io, socket) {
     pendingTransactions.set(nonce, transaction);
 
     console.log(`Transaction requested: ${nonce} (Amount: ${amount}, Threshold: ${threshold})`);
+    
+    await createAuditLog(
+      'PAYMENT_INITIATED',
+      `${formatPHP(amount)} payment initiated by ${formatNodeName(requesterId)}`,
+      requesterId,
+      { nonce, amount, threshold }
+    );
 
     broadcastToNodes(io, 'new_transaction', {
       nonce,
@@ -353,12 +484,19 @@ export function handleSocketConnection(io, socket) {
         const requiredThreshold = updated.threshold;
         const currentCount = updated.collectedSignatures.length;
 
-        console.log(`Signature received from Node ${nodeId} for ${nonce} (${currentCount}/${requiredThreshold})`);
+console.log(`Signature received from Node ${nodeId} for ${nonce} (${currentCount}/${requiredThreshold})`);
+
+        await createAuditLog(
+          'PAYMENT_APPROVED',
+          `Payment approved by ${formatNodeName(nodeId)} (${currentCount}/${requiredThreshold})`,
+          nodeId,
+          { nonce, amount: updated.amount, threshold: requiredThreshold, collectedCount: currentCount }
+        );
 
         // Broadcast signature progress to all nodes
-        broadcastToNodes(io, 'signature_received', {
-          nonce,
-          nodeId,
+         broadcastToNodes(io, 'signature_received', {
+           nonce,
+           nodeId,
           collectedCount: currentCount,
           threshold: requiredThreshold
         });
@@ -420,6 +558,22 @@ export function handleSocketConnection(io, socket) {
 
             const isValid = verifySignature(JOINT_PUBLIC_KEY, messageToVerify, aggregated);
             console.log(`Transaction ${nonce} completed. Verification: ${isValid}`);
+
+            await createAuditLog(
+              'QR_GENERATED',
+              `QR generated for ${formatPHP(claimed.amount)} payment`,
+              claimed.requesterId,
+              { nonce: claimed.nonce, amount: claimed.amount, signers }
+            );
+
+            if (requiredThreshold > 1) {
+              await createAuditLog(
+                'THRESHOLD_REACHED',
+                `Signature threshold (${requiredThreshold}) reached for ${formatPHP(claimed.amount)}`,
+                claimed.requesterId,
+                { nonce: claimed.nonce, amount: claimed.amount, threshold: requiredThreshold, signers }
+              );
+            }
 
             const completionData = {
               success: true,
@@ -540,6 +694,13 @@ export function handleSocketConnection(io, socket) {
     
     const newBalance = await deductBalance(amount);
     broadcastToNodes(io, 'balance_update', { balance: newBalance });
+    
+    await createAuditLog(
+      'PAYMENT_VERIFIED',
+      `Payment of ${formatPHP(amount)} verified by merchant`,
+      null,
+      { nonce, amount, requesterId: transaction.requesterId }
+    );
 
         broadcastToNodes(io, 'payment_received', {
           nonce,
@@ -583,6 +744,13 @@ export function handleSocketConnection(io, socket) {
       transaction.status = 'CANCELLED';
       await transaction.save();
       
+      await createAuditLog(
+        'PAYMENT_CANCELLED',
+        `${formatPHP(transaction.amount)} payment cancelled by ${formatNodeName(requesterId)}`,
+        requesterId,
+        { nonce: transaction.nonce, amount: transaction.amount }
+      );
+      
       // Remove from pending map if it exists there
       pendingTransactions.delete(nonce);
 
@@ -611,23 +779,30 @@ export function handleSocketConnection(io, socket) {
           { new: true }
         );
 
-        if (!transaction) {
-          const existing = await Transaction.findOne({ nonce });
-          if (!existing) {
-            socket.emit('error', { message: 'Transaction not found' });
-          } else {
-            socket.emit('error', { message: `Cannot reject transaction with status: ${existing.status}` });
-          }
-          return;
-        }
+if (!transaction) {
+           const existing = await Transaction.findOne({ nonce });
+           if (!existing) {
+             socket.emit('error', { message: 'Transaction not found' });
+           } else {
+             socket.emit('error', { message: `Cannot reject transaction with status: ${existing.status}` });
+           }
+           return;
+         }
+  
+console.log(`Node ${nodeId} rejected transaction ${nonce}. Total rejections: ${transaction.rejectedBy.length}`);
 
-        console.log(`Node ${nodeId} rejected transaction ${nonce}. Total rejections: ${transaction.rejectedBy.length}`);
+        await createAuditLog(
+          'PAYMENT_REJECTED',
+          `Payment rejected by ${formatNodeName(nodeId)}`,
+          nodeId,
+          { nonce, amount: transaction.amount }
+        );
 
         // Check if it's still possible to meet the threshold
         // Total nodes = 5.
         // Remaining possible signers = Total Nodes - Nodes who rejected
-        const totalNodes = 5;
-        const possibleSigners = totalNodes - transaction.rejectedBy.length;
+        const availableNodes = 5;
+        const possibleSigners = availableNodes - transaction.rejectedBy.length;
 
         if (possibleSigners < transaction.threshold) {
           console.log(`Transaction ${nonce} is now impossible to complete. Marking as FAILED.`);
@@ -636,6 +811,13 @@ export function handleSocketConnection(io, socket) {
             { $set: { status: 'FAILED', updatedAt: new Date() } }
           );
           pendingTransactions.delete(nonce);
+
+          await createAuditLog(
+            'THRESHOLD_NOT_MET',
+            `Payment of ${formatPHP(transaction.amount)} declined - too many rejections`,
+            transaction.requesterId,
+            { nonce: transaction.nonce, amount: transaction.amount, rejectedBy: transaction.rejectedBy }
+          );
 
           io.emit('transaction_denied', {
             nonce: transaction.nonce,
@@ -659,9 +841,16 @@ export function handleSocketConnection(io, socket) {
 
   socket.on('disconnect', () => {
     const nodeId = socket.nodeId;
+    const role = socket.role;
     if (nodeId) {
       activeNodes.delete(nodeId);
+      lastSeenMap.delete(nodeId);
       console.log(`Node ${nodeId} disconnected`);
+      
+      if (role !== 'merchant') {
+        createAuditLog('NODE_OFFLINE', `Node ${nodeId} went offline`, nodeId, { role });
+      }
+      
       broadcastOccupiedNodes(io);
     }
   });
