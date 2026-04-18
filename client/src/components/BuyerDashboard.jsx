@@ -112,7 +112,9 @@ export default function BuyerDashboard({ user, onLogout }) {
 
     socket.on('transaction_expired', (data) => {
       setPendingApprovals(prev => prev.filter(p => p.nonce !== data.nonce));
-      setMyTransactions(prev => prev.filter(p => p.nonce !== data.nonce));
+      setMyTransactions(prev => prev.map(t => 
+        t.nonce === data.nonce ? { ...t, status: 'EXPIRED' } : t
+      ));
 
       if (String(data.requesterId) === String(user.nodeId)) {
         showNotification('The request expired.', 'error');
@@ -550,9 +552,9 @@ export default function BuyerDashboard({ user, onLogout }) {
               ) : (
                 <div className="space-y-3">
                   {myTransactions.map((tx) => {
-                    const isExpired = tx.expiresAt && new Date(tx.expiresAt) < new Date();
+                    const isExpired = tx.status === 'EXPIRED' || (tx.expiresAt && new Date(tx.expiresAt) < new Date());
                     return (
-                    <div key={tx.nonce} className={`p-3 border rounded-lg ${tx.status === 'PAID' ? 'border-success-300 bg-success-50' : tx.status === 'PENDING' ? 'border-warning-300 bg-warning-50' : isExpired ? 'border-danger-300 bg-danger-50' : 'border-gray-200'}`}>
+                    <div key={tx.nonce} className={`p-3 border rounded-lg ${tx.status === 'PAID' ? 'border-success-300 bg-success-50' : isExpired ? 'border-danger-300 bg-danger-50' : tx.status === 'PENDING' ? 'border-warning-300 bg-warning-50' : 'border-gray-200'}`}>
                       <div className="flex justify-between items-start">
                         <div>
                           <p className="font-medium">₱{tx.amount.toLocaleString()}</p>
@@ -579,7 +581,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                           {/* Cancel Request button removed from here as requested */}
                         </div>
                       )}
-                      {tx.qrData && (tx.status === 'COMPLETED' || tx.status === 'PAID') && (
+                      {tx.qrData && (tx.status === 'COMPLETED' || tx.status === 'PAID' || tx.status === 'EXPIRED') && (
                         <div 
                           className="mt-3 flex flex-col items-center bg-white p-3 rounded border border-success-200 cursor-pointer hover:bg-success-50 transition-colors"
                           onClick={() => openQrModal(tx.qrData, tx.qrExpiresAt, tx.status)}
