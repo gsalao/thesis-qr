@@ -691,15 +691,18 @@ console.log(`Signature received from Node ${nodeId} for ${nonce} (${currentCount
     // Update status to PAID to prevent replay
     transaction.status = 'PAID';
     await transaction.save();
-    
-    const newBalance = await deductBalance(amount);
+
+    // Use the server-stored amount (not the client-supplied value) to prevent
+    // socket-level amount inflation/deflation attacks.
+    const authorizedAmount = transaction.amount;
+    const newBalance = await deductBalance(authorizedAmount);
     broadcastToNodes(io, 'balance_update', { balance: newBalance });
-    
+
     await createAuditLog(
       'PAYMENT_VERIFIED',
-      `Payment of ${formatPHP(amount)} verified by merchant`,
+      `Payment of ${formatPHP(authorizedAmount)} verified by merchant`,
       null,
-      { nonce, amount, requesterId: transaction.requesterId }
+      { nonce, amount: authorizedAmount, requesterId: transaction.requesterId }
     );
 
         broadcastToNodes(io, 'payment_received', {

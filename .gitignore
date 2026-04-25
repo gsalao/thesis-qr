@@ -3,3 +3,5 @@
 /data/
 node_modules/
 /client/node_modules/
+.vercel
+.env*.local
