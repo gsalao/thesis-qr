@@ -1,0 +1,93 @@
+
+> dkg-server@1.0.0 test:latency
+> node tests/latency-test.js
+
+============================================================
+  DKG Payment System — Latency Benchmark
+  Trials: 30  |  Server: http://localhost:5001
+============================================================
+Connecting sockets… OK
+
+Trial   QR Gen (ms)    Verify (ms)    Total (ms)  
+--------------------------------------------------
+1       19             4              23          
+2       23             3              26          
+3       27             5              32          
+4       23             5              28          
+5       25             6              31          
+6       23             5              28          
+7       28             5              33          
+8       29             5              34          
+9       25             4              29          
+10      23             4              27          
+11      23             4              27          
+12      23             4              27          
+13      26             6              32          
+14      31             3              34          
+15      32             4              36          
+16      23             4              27          
+17      27             5              32          
+18      27             4              31          
+19      24             4              28          
+20      24             7              31          
+21      26             4              30          
+22      21             6              27          
+23      25             7              32          
+24      24             5              29          
+25      26             4              30          
+26      19             7              26          
+27      24             5              29          
+28      24             4              28          
+29      25             4              29          
+30      23             8              31          
+
+============================================================
+  STATISTICS SUMMARY
+============================================================
+
+  QR Generation Latency
+  Metric       Value
+  -------------------------
+  n            30
+  min          19 ms
+  max          32 ms
+  mean         24.73 ms
+  std dev      2.87 ms
+  p50          24 ms
+  p90          29 ms
+  p95          31 ms
+  p99          32 ms
+
+  Verification Latency
+  Metric       Value
+  -------------------------
+  n            30
+  min          3 ms
+  max          8 ms
+  mean         4.83 ms
+  std dev      1.21 ms
+  p50          5 ms
+  p90          7 ms
+  p95          7 ms
+  p99          8 ms
+
+  Total End-to-End Latency
+  Metric       Value
+  -------------------------
+  n            30
+  min          23 ms
+  max          36 ms
+  mean         29.57 ms
+  std dev      2.81 ms
+  p50          29 ms
+  p90          34 ms
+  p95          34 ms
+  p99          36 ms
+
+============================================================
+  TARGET CHECK: Verification latency < 200 ms
+  Passed: 30/30 trials (100.0%)
+  Result: PASS ✓ (p95 = 7 ms)
+============================================================
+
+__LATENCY_JSON__{"timestamp":"2026-05-02T01:17:47.424Z","trials":30,"trialLog":[{"trial":1,"qrMs":19,"verifyMs":4,"totalMs":23},{"trial":2,"qrMs":23,"verifyMs":3,"totalMs":26},{"trial":3,"qrMs":27,"verifyMs":5,"totalMs":32},{"trial":4,"qrMs":23,"verifyMs":5,"totalMs":28},{"trial":5,"qrMs":25,"verifyMs":6,"totalMs":31},{"trial":6,"qrMs":23,"verifyMs":5,"totalMs":28},{"trial":7,"qrMs":28,"verifyMs":5,"totalMs":33},{"trial":8,"qrMs":29,"verifyMs":5,"totalMs":34},{"trial":9,"qrMs":25,"verifyMs":4,"totalMs":29},{"trial":10,"qrMs":23,"verifyMs":4,"totalMs":27},{"trial":11,"qrMs":23,"verifyMs":4,"totalMs":27},{"trial":12,"qrMs":23,"verifyMs":4,"totalMs":27},{"trial":13,"qrMs":26,"verifyMs":6,"totalMs":32},{"trial":14,"qrMs":31,"verifyMs":3,"totalMs":34},{"trial":15,"qrMs":32,"verifyMs":4,"totalMs":36},{"trial":16,"qrMs":23,"verifyMs":4,"totalMs":27},{"trial":17,"qrMs":27,"verifyMs":5,"totalMs":32},{"trial":18,"qrMs":27,"verifyMs":4,"totalMs":31},{"trial":19,"qrMs":24,"verifyMs":4,"totalMs":28},{"trial":20,"qrMs":24,"verifyMs":7,"totalMs":31},{"trial":21,"qrMs":26,"verifyMs":4,"totalMs":30},{"trial":22,"qrMs":21,"verifyMs":6,"totalMs":27},{"trial":23,"qrMs":25,"verifyMs":7,"totalMs":32},{"trial":24,"qrMs":24,"verifyMs":5,"totalMs":29},{"trial":25,"qrMs":26,"verifyMs":4,"totalMs":30},{"trial":26,"qrMs":19,"verifyMs":7,"totalMs":26},{"trial":27,"qrMs":24,"verifyMs":5,"totalMs":29},{"trial":28,"qrMs":24,"verifyMs":4,"totalMs":28},{"trial":29,"qrMs":25,"verifyMs":4,"totalMs":29},{"trial":30,"qrMs":23,"verifyMs":8,"totalMs":31}],"qr":{"n":30,"min":19,"max":32,"mean":24.73,"stddev":2.87,"p50":24,"p90":29,"p95":31,"p99":32},"verify":{"n":30,"min":3,"max":8,"mean":4.83,"stddev":1.21,"p50":5,"p90":7,"p95":7,"p99":8},"total":{"n":30,"min":23,"max":36,"mean":29.57,"stddev":2.81,"p50":29,"p90":34,"p95":34,"p99":36},"target200msPass":30,"target200msPassPct":100}__LATENCY_JSON_END__

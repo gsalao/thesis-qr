@@ -1,5 +1,31 @@
 \documentclass[a4paper]{scl-article}
 \usepackage{amsmath,amssymb,graphicx, float}
+\usepackage{listings}
+\usepackage{xcolor}
+
+% Render the Philippine peso glyph (U+20B1) safely under pdflatex.
+% On engines that natively support Unicode (XeLaTeX, LuaLaTeX) this
+% declaration is benign; pdflatex would otherwise reject the codepoint.
+\DeclareUnicodeCharacter{20B1}{Php\,}
+
+\lstdefinestyle{terminal}{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{gray!8},
+  frame=single,
+  framerule=0.4pt,
+  rulecolor=\color{gray!40},
+  framesep=4pt,
+  xleftmargin=8pt,
+  xrightmargin=8pt,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  captionpos=b,
+  aboveskip=10pt,
+  belowskip=10pt
+}
+\lstset{style=terminal}
 
 \begin{document}
 
@@ -462,6 +488,16 @@ BLS12-381 operations: key share generation, partial signing, Lagrange-based sign
 MongoDB 6+ is used for persistence via the Mongoose ODM. The \texttt{Transaction} schema enforces a status state machine across six states: \texttt{PENDING}, \texttt{COMPLETED}, \texttt{FAILED}, \texttt{EXPIRED}, \texttt{PAID}, and \texttt{CANCELLED}. Each document records the transaction amount, participant node signatures, nonce, timestamp, and terminal status, providing a complete audit trail for replay attack validation tests.
 
 
+
+%------------------------------------------------------------------------------
+% Results, Discussion, Recommendations (modular)
+%
+
+\input{sections/results}
+
+\input{sections/discussion}
+
+\input{sections/recommendations}
 
 %------------------------------------------------------------------------------
 % Refs:
