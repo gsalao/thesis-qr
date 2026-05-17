@@ -1,0 +1,250 @@
+\section{Results and Evaluation}
+\label{header:results}
+
+\paragraph{}This section presents the empirical evaluation of the implemented prototype along the five-phase validation pipeline established in Section~\ref{sect:meth4}: cryptographic correctness (Phase 1), penetration testing and performance benchmarking (Phase 2), an initial User Acceptance Test (UAT Cycle 1, Phase 3), a targeted refinement pass driven by Cycle-1 feedback (Phase 4), and a second User Acceptance Test on the refined prototype (UAT Cycle 2, Phase 5). The evaluation was conducted on the localhost build of the prototype, whose architecture is identical to the production deployment described in Section~\ref{sect:meth4_d}; the only material difference between the two environments is the addition of a TLS termination layer at the cloud edge, which does not affect the cryptographic protocol itself but does add fixed network round-trip overhead. All artefacts referenced in this section --- raw test logs, statistical summaries, and the unaltered output of the benchmark scripts --- are reproduced under the project's \texttt{logs/} directory and are referenced inline by listing.
+
+\subsection{Phase 1 --- Functional and Cryptographic Validation}
+\label{sect:results_func}
+
+\paragraph{}Cryptographic correctness was assessed through a Vitest-based unit suite (\texttt{server/tests/functional.test.js}) that isolates the BLS12-381 primitives --- hash-to-curve, partial signing, Lagrange-based aggregation, and bilinear-pairing verification --- from the network and persistence layers. The suite executes thirty-five (35) tests across seven (7) categories and completed in 707~ms on the development machine. Results are summarised in Table~\ref{tab:functional}.
+
+\begin{table}[H]
+  \centering
+  \caption{Functional test results --- BLS12-381 primitives (35 / 35 passed).}
+  \label{tab:functional}
+  \begin{tabular}{|c|l|c|c|}
+    \hline
+    \# & Category & Tests & Result \\\hline
+    1 & Hash function (\texttt{hashMessage}) & 5 & 5 / 5 \\\hline
+    2 & Partial signature generation (\texttt{signMessage}) & 5 & 5 / 5 \\\hline
+    3 & Threshold configuration & 6 & 6 / 6 \\\hline
+    4 & All ten valid 3-of-5 combinations & 10 & 10 / 10 \\\hline
+    5 & Insufficient signers (security) & 2 & 2 / 2 \\\hline
+    6 & Tamper-resistance (payload attacks) & 6 & 6 / 6 \\\hline
+    7 & Aggregation error handling & 1 & 1 / 1 \\\hline
+    \multicolumn{2}{|r|}{\textbf{Total}} & \textbf{35} & \textbf{35 / 35} \\\hline
+  \end{tabular}
+\end{table}
+
+\paragraph{}Particularly relevant to the threshold-correctness claim is Category~4: every one of the $\binom{5}{3} = 10$ possible 3-of-5 signer combinations was tested for end-to-end aggregation. Each subset successfully reconstructed the joint secret through Lagrange interpolation and produced an aggregate signature $F_{\text{sig}}$ that satisfied the bilinear pairing equation
+\[
+e(F_{\text{sig}},\, g) \;=\; e(H(M),\, PK).
+\]
+
+\paragraph{}Conversely, Category~5 confirmed the dual property: every 2-of-5 combination tested failed verification, since two evaluation points on the degree-2 polynomial $f(x) = \text{secret} + x + x^2$ uniquely determine a degree-1 line that does not pass through $f(0) = \text{secret}$. The Lagrange interpolation produces an arithmetically valid but cryptographically incorrect scalar, which the pairing equation rejects. This is the precise mathematical property that grounds the threshold-security claim of the protocol; a coalition of fewer than $t$ shareholders cannot forge a signature even with full knowledge of their own shares.
+
+\paragraph{}Tamper-resistance (Category~6) addressed the integrity guarantee. Six payload attacks were attempted: amount tampering ($\textit{amount}: 2500 \to 1$), nonce replacement, timestamp zeroing, two forged-byte signatures (random hex and all-zero), and cross-transaction signature reuse. All six were rejected by the verifier --- either by the curve membership check inside the underlying \texttt{@noble/curves} library (for malformed points such as the random and all-zero forgeries) or by the pairing equation itself (for valid points produced from a different message digest). In every case, the rejection was fail-closed: the verifier returned \texttt{false} without exposing any partial information about which check had failed, removing the oracle that an attacker would otherwise need to refine forged inputs.
+
+\subsection{Phase 2a --- Performance Benchmarks}
+\label{sect:results_perf}
+
+\paragraph{}The latency benchmark, executed via \texttt{server/tests/latency-test.js}, measures the two performance-critical operations on a localhost deployment: (i) \textbf{QR generation}, defined as the time from the \texttt{request\_transaction} emission to receipt of \texttt{transaction\_initiated} with status \texttt{COMPLETED}; and (ii) \textbf{payment verification}, the time from the \texttt{verify\_payment} emission to receipt of \texttt{payment\_processed}. Each trial used a single low-value transaction (₱100--₱109, threshold $t = 1$) with a 300~ms inter-trial delay to avoid lock contention on the per-transaction mutex. Thirty (30) consecutive trials were collected.
+
+\begin{table}[H]
+  \centering
+  \caption{Latency benchmark (n = 30) on localhost. Acceptance criterion: verification $< 200$~ms.}
+  \label{tab:latency}
+  \begin{tabular}{|l|c|c|c|}
+    \hline
+    Metric & QR Generation & Verification & Total End-to-End \\\hline
+    $n$ & 30 & 30 & 30 \\\hline
+    Min & 19~ms & 3~ms & 23~ms \\\hline
+    Max & 32~ms & 8~ms & 36~ms \\\hline
+    Mean & 24.73~ms & 4.83~ms & 29.57~ms \\\hline
+    Std.\ dev. & 2.87~ms & 1.21~ms & 2.81~ms \\\hline
+    Median (p50) & 24~ms & 5~ms & 29~ms \\\hline
+    p90 & 29~ms & 7~ms & 34~ms \\\hline
+    p95 & 31~ms & 7~ms & 34~ms \\\hline
+    p99 & 32~ms & 8~ms & 36~ms \\\hline
+  \end{tabular}
+\end{table}
+
+\paragraph{}\textbf{Verification latency} --- the principal acceptance criterion of Section~\ref{sect:meth4_c} --- has a sample mean of $4.83$~ms and a 99th-percentile worst case of $8$~ms across 30 trials. Every trial completed in well under $200$~ms; the 99th-percentile margin against the target is $200 / 8 = 25\times$. This margin is large enough that even on the production cloud deployment, where geographic routing on the free-tier hosting introduces an additional $50$--$150$~ms of round-trip overhead, the total verification time is expected to remain well within the criterion.
+
+\paragraph{}\textbf{QR generation} is the more expensive of the two operations because it bundles three cryptographic primitives --- BLS partial signing, Lagrange-based aggregation, and bilinear-pairing self-verification --- with a sequence of MongoDB writes (\texttt{Transaction.create}, \texttt{Transaction.save}, \texttt{GroupBalance.findOneAndUpdate}, \texttt{AuditLog.save}). Even so, the mean of $24.73$~ms and the p99 of $32$~ms remain comfortably below the $100$~ms threshold conventionally taken as the upper bound of imperceptible response in interactive systems. Figure~\ref{fig:latency-dist} visualises the distribution of the verification path against the acceptance criterion, and Listing~\ref{lst:latency} reproduces the relevant excerpt of the benchmark output verbatim, for traceability.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{images/fig_latency.png}
+  \caption{Verification latency distribution over $n = 30$ trials. The acceptance criterion ($< 200$~ms) lies far off-chart; every observed sample is comfortably below it, with a $\sim 25\times$ margin at the 99th percentile.}
+  \label{fig:latency-dist}
+\end{figure}
+
+\begin{lstlisting}[caption={Excerpt of the latency benchmark output (\texttt{npm run test:latency}, 30 trials, 2026-05-02).}, label={lst:latency}]
+Verification Latency
+Metric       Value
+-------------------------
+n            30
+min          3 ms
+max          8 ms
+mean         4.83 ms
+std dev      1.21 ms
+p50          5 ms
+p90          7 ms
+p95          7 ms
+p99          8 ms
+
+Total End-to-End Latency
+Metric       Value
+-------------------------
+mean         29.57 ms
+p95          34 ms
+p99          36 ms
+
+TARGET CHECK: Verification latency < 200 ms
+Passed: 30/30 trials (100.0%)
+Result: PASS  (p95 = 7 ms)
+\end{lstlisting}
+
+\paragraph{}A complementary observation concerns the BLS aggregation step itself. Because BLS signatures aggregate into a single compact group element regardless of the number of signers, the \textit{post}-aggregation payload size is invariant in $t$; only the pre-aggregation message complexity grows linearly with $t$, and that growth is absorbed entirely on the server. This is a structural advantage over multi-signature schemes that concatenate independent signatures into the QR payload (e.g., stacked RSA), where increasing $t$ inflates QR data density and consequently scan latency, as further discussed in Section~\ref{sect:disc_qr}.
+
+\subsection{Phase 2b --- Adversarial / MITM Validation}
+\label{sect:results_mitm}
+
+\paragraph{}Resilience against the threat model of Section~\ref{sect:meth4_c} was evaluated through the script \texttt{server/tests/mitm-test.js}, which exercises thirteen (13) distinct attack scenarios partitioned into an offline cryptographic group (A1--A7) and an online protocol group (B1--B6). All thirteen scenarios resolved as expected; in each adversarial case the attack was blocked, and in the two positive controls (A7 and B4) the legitimate request was correctly accepted. Results are summarised in Table~\ref{tab:mitm}.
+
+\begin{table}[H]
+  \centering
+  \caption{MITM attack scenarios --- 13 / 13 resolved as expected.}
+  \label{tab:mitm}
+  \begin{tabular}{|c|l|c|}
+    \hline
+    \# & Scenario & Outcome \\\hline
+    A1 & BLS forgery: random bytes as signature & Blocked \\\hline
+    A2 & BLS forgery: all-zero signature bytes & Blocked \\\hline
+    A3 & Amount tampering on a valid signature & Blocked \\\hline
+    A4 & Nonce replacement on a valid signature & Blocked \\\hline
+    A5 & Cross-transaction signature reuse & Blocked \\\hline
+    A6 & 2-of-5 threshold attack & Blocked \\\hline
+    A7 & Positive control (legitimate 3-of-5 sig) & Accepted \\\hline
+    B1 & \texttt{verify\_payment} with nonexistent nonce & Blocked \\\hline
+    B2 & Amount inflation (₱999{,}999 vs.\ stored ₱100) & Blocked \\\hline
+    B3 & Amount deflation (₱1 vs.\ stored ₱500) & Blocked \\\hline
+    B4 & Positive control (legitimate verify) & Accepted \\\hline
+    B5 & Replay of a \texttt{PAID} transaction & Blocked \\\hline
+    B6 & Premature verify (\texttt{PENDING} transaction) & Blocked \\\hline
+  \end{tabular}
+\end{table}
+
+\paragraph{}\textbf{Offline cryptographic attacks (A1--A7)} target the pairing-verification logic directly without going through the WebSocket transport. A1 and A2 exercise the elliptic-curve membership check inside \texttt{@noble/curves}: a candidate pair $(x, y)$ that does not satisfy the BLS12-381 curve equation is rejected before the pairing computation begins, surfaced internally as \texttt{Error: bad point coordinate x} (random bytes) or \texttt{Error: bad point coordinate y} (all-zero bytes). A3--A5 hold the signature constant while perturbing the message digest $H(M)$ via amount tampering, nonce replacement, or cross-transaction signature reuse; in each case the pairing equation breaks because the signature was bound to a different digest. A6 directly tests the threshold property by aggregating only two of the five shares and presenting the result as if it were a complete signature; the Lagrange interpolation produces a scalar that does not equal the joint secret, and the pairing fails. A7 confirms the positive control: a legitimate aggregate of three shares verifies.
+
+\paragraph{}\textbf{Online protocol attacks (B1--B6)} target the verifier through the same Socket.io interface a real client would use. B1 submits a freshly generated UUID as a transaction nonce; the verifier responds \texttt{``Transaction not found or has expired from records.''} since no matching ledger entry exists, demonstrating that nonce uniqueness alone is sufficient to defeat the simplest replay variants. B2 and B3 are the most economically meaningful attacks in the suite: an adversary who has compromised the WebSocket transport may attempt to inflate or deflate the deducted amount by submitting a forged \texttt{amount} field together with an otherwise valid (replayed) nonce. The current implementation deducts only the amount stored server-side at the time of transaction creation; the client-supplied value is logged but ignored. Test~B2 confirmed that a ₱999{,}999 inflation attempt against a ₱100 transaction resulted in exactly ₱100 being deducted; B3 confirmed the symmetric deflation case (₱1 submitted against a ₱500 transaction $\to$ ₱500 deducted). B5 verifies that a previously paid transaction (status \texttt{PAID}) cannot be re-verified; B6 verifies that a transaction whose threshold has not yet been met (status \texttt{PENDING}) cannot be paid out prematurely.
+
+\paragraph{}\textit{A note on disclosure.} The amount-tampering vulnerability that motivated tests B2 and B3 was discovered during this study and patched in \texttt{server/controllers/socketHandler.js} prior to the performance benchmarking reported in Section~\ref{sect:results_perf}. The pre-fix handler used \texttt{data.amount} (the client-supplied value) as the operand of the balance deduction, exposing the system to an attacker who had broken the transport layer (e.g., via a rogue certificate authority or a downgrade attack on a non-TLS instance). The patched handler reads the authoritative amount from the persisted \texttt{Transaction} document, removing the client controllability of that field. The B2 and B3 tests were authored specifically to provide regression coverage for this fix.
+
+\paragraph{}On the production deployment (\texttt{https://thesis-qr.onrender.com}), all Socket.io traffic uses WebSocket Secure (\texttt{wss://}) over TLS 1.3. A network-level adversary intercepting TCP packets observes only ciphertext, so the offline cryptographic attacks A1--A7 and the protocol attacks B1--B6 effectively assume an attacker who has already broken TLS --- a strictly stronger threat model than a passive eavesdropper. The fact that all thirteen scenarios are still defeated under that stronger assumption is, in the view of the authors, the most consequential security claim of the present study.
+
+\subsection{Phase 3 --- UAT Cycle 1 (Initial Usability)}
+\label{sect:results_uat1}
+
+\paragraph{}Cycle 1 followed the protocol set out in Section~\ref{sect:meth4_uat1}. A first cohort of five (5) participants was recruited and exercised the prototype as it existed at the conclusion of Phase 2 --- that is, with the QR code carrying its entire authorisation payload inline. In this initial encoding (subsequently termed the ``Big QR'' variant), the joint public key $PK$, the curve generator $g$, the aggregate signature $F_{\text{sig}}$, and the transaction message $M$ are serialised into the QR matrix directly, producing a self-contained, in-band cryptographic proof that the verifier can validate without contacting any external service. Cycle 1 was therefore the first occasion on which the protocol's intended encoding was placed in front of real users.
+
+\paragraph{}Each participant was assigned a phone role --- Shopper (initiator), Approver, or Cashier (verifier) --- and walked through the ten task scenarios listed in the UAT instrument. Every scenario produced the expected outcome (\textbf{10 / 10 PASS}), including the race-condition case (Scenario~4: three approvers tap simultaneously on a ₱2{,}000 request; the system accepts the first two valid approvals and ignores the third), the double-scan-prevention case (Scenario~5), and the timeout / QR-expiry case (Scenario~9, in which the Shopper's screen showed ``request expired'' after the two-minute QR TTL had elapsed). Two scenarios are particularly worth flagging:
+
+\begin{itemize}
+  \item \textbf{Scenario~6 (Expired QR Code).} Although the test passed, an observer note flagged that the participant ``just need[ed] to open the QR \textit{agad}'' --- i.e., that the perceived window between QR generation and scan was tighter than the formal two-minute TTL would suggest.
+  \item \textbf{Scenario~7 (Fake / External QR).} The cashier app correctly rejected an unrelated GCash QR sticker, demonstrating that the verifier's payload-schema check (presence of $\{PK,\, g,\, F_{\text{sig}},\, M\}$) provides a usable second line of defence even before the pairing equation is evaluated. This is operationally important because it allows the verifier to discriminate ``not one of ours'' QRs without expending the cost of a pairing computation on every scan.
+\end{itemize}
+
+\paragraph{}The principal Cycle-1 friction signal arose from survey item~4.2 (``\textit{Did the Cashier's scanner recognise the dynamic QR code on the first attempt?}''): only $2 / 5$ participants reported instantaneous recognition, while $3 / 5$ reported a 2--3 second focus delay before the QR could be decoded (no participant reported a hard scan failure). The observer notes attributed this consistently to the Cashier's camera taking additional frames to focus on the densely packed matrix. Read alongside the Scenario~6 observation above, the two signals together suggested that the dominant latency in the user-perceived flow was \textit{optical} rather than cryptographic: the formal two-minute TTL was generous, but participants' effective scan-attempt window was shorter because the camera consumed several seconds of it acquiring focus.
+
+\paragraph{}A six-item adaptation of the System Usability Scale (SUS)~\cite{brooke1996sus, bangor2008sus} was administered alongside the scenarios. All five positively keyed items received unanimous ratings in the 4--5 range, and the single negatively keyed item (``\textit{I think that I would need the support of a technical person to use this system}'') received a unanimous rating of 1 (Strongly Disagree). Cycle-1 perceived-security ratings (Section~5 of the survey, ``Multi-Party Approval'') were uniformly positive: all five participants selected either ``Yes, significantly safer'' or ``Somewhat safer''. The open-ended feedback (Section~7.1) raised two recurring suggestions --- a deposit / fund-replenishment flow and stricter credential confirmation at the point of approval --- that were re-raised in Cycle 2 and are reported in full in Section~\ref{sect:results_uat_open}.
+
+\subsection{Phase 4 --- UI Refinement and Bug Fixes}
+\label{sect:results_refine}
+
+\paragraph{}The Cycle-1 scan-latency signal motivated the principal refinement of Phase 4. A diagnostic measurement on the prototype confirmed the suspected cause: the serialised Big QR payload was $\sim 440$~bytes, which forced the QR matrix to version~14 ($77 \times 77$ modules) at the error-correction level used by the cashier app. At this module density, the camera autofocus required additional frames to discriminate adjacent modules~\cite{corpuz2025}, producing the 2--3~second delay that 60\% of Cycle-1 participants reported.
+
+\paragraph{}The refinement, designed to leave Phases 1 and 2 untouched (Section~\ref{sect:meth4_refine}), introduced an alternative encoding --- subsequently the ``Small QR'' variant --- in which the same authorisation envelope is identified by a short reference token (a UUID together with a session identifier), with the cryptographic content fetched out of band by the verifier on scan over the same authenticated channel that the rest of the protocol already trusts. The token fits comfortably in a version-2 ($25 \times 25$-module) QR. Crucially, this refinement is an \textit{encoding-layer} change: the BLS12-381 primitives, the threshold policy, the message format, the AES-256-GCM session encryption, and the pairing verification predicate are all unchanged. The Phase 1 unit suite and the Phase 2 MITM script continued to pass against the refined build without modification.
+
+\paragraph{}Figure~\ref{fig:qr-comparison-results} renders the two variants side by side at equal physical scale, making the module-density difference immediately visible.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{images/fig_qr_comparison.png}
+  \caption{The two QR encodings compared across the two UAT cycles, rendered at equal physical scale. (a) The Big QR (used in Cycle 1) carries the full $\{PK, g, F_{\text{sig}}, M\}$ envelope at QR version~14 ($77 \times 77$ modules). (b) The Small QR (introduced in Phase 4 and used in Cycle 2) carries only a short reference token at QR version~2 ($25 \times 25$ modules); the verifier retrieves the same envelope out of band at scan time.}
+  \label{fig:qr-comparison-results}
+\end{figure}
+
+\paragraph{}A secondary set of refinements addressed minor interface inconsistencies surfaced by observer notes: clarifying the approver pop-up's transaction-amount label, surfacing the QR-expiry countdown more prominently to the Shopper, and tightening copy on the cashier's rejection screen so that the cause of rejection (expired, unknown nonce, malformed payload) is reported unambiguously. None of these changes touched the protocol layer, and each is treated as ordinary UI work rather than as a security-relevant intervention.
+
+\subsection{Phase 5 --- UAT Cycle 2 (Final Usability)}
+\label{sect:results_uat2}
+
+\paragraph{}Cycle 2 followed the protocol set out in Section~\ref{sect:meth4_uat2}: the same instrument and the same scenario set as Cycle 1, but applied to the refined build in which the Small QR variant had replaced the Big QR on the user-facing path. A second cohort of five (5) participants was recruited; no participant overlapped with Cycle 1. As in Cycle 1, every scenario produced the expected outcome (\textbf{10 / 10 PASS}), including the same race-condition, double-scan, and expiry cases described above; the refined wording on the cashier's rejection screen was observed to function correctly under Scenario~7.
+
+\paragraph{}The principal Cycle-2 contrast against Cycle 1 was on survey item~4.2. All $5 / 5$ Cycle-2 participants reported instantaneous QR recognition; no participant reported the 2--3 second focus delay that had been the dominant Cycle-1 friction signal. Table~\ref{tab:qr-recognition} aggregates the two cohorts' responses; Figure~\ref{fig:qr-recognition} visualises them.
+
+\begin{table}[H]
+  \centering
+  \caption{QR recognition survey results (Item 4.2) by UAT cycle, $n = 5$ per cycle. The Cycle-1 cohort exercised the Big QR encoding; the Cycle-2 cohort exercised the Small QR encoding produced by the Phase-4 refinement.}
+  \label{tab:qr-recognition}
+  \begin{tabular}{|l|c|c|}
+    \hline
+    Response & Cycle~1 (Big QR) & Cycle~2 (Small QR) \\\hline
+    Yes, immediately & 2 / 5 (40\%) & 5 / 5 (100\%) \\\hline
+    Took 2--3 seconds to focus & 3 / 5 (60\%) & 0 / 5 (0\%) \\\hline
+    Failed / required retry & 0 / 5 & 0 / 5 \\\hline
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{images/fig_qr_recognition.png}
+  \caption{QR recognition responses by UAT cycle (Item 4.2). The 60\%~/~0\% reduction on the ``2--3 seconds to focus'' bin between Cycle 1 (Big QR) and Cycle 2 (Small QR) is the principal evidence that the Phase-4 encoding refinement achieved its goal; the trade-off it surfaces is discussed in Section~\ref{sect:disc_qr}.}
+  \label{fig:qr-recognition}
+\end{figure}
+
+\paragraph{}The asymmetry between the two cycles is consistent with the well-documented relationship between QR module density and camera autofocus latency: as the density of black/white modules per linear inch rises (a function of QR version and physical display size), the camera must focus more precisely to discriminate adjacent modules, and the autofocus algorithm typically requires more frames to settle~\cite{corpuz2025}. The Cycle-2 cohort thus exercised an encoding whose payload size is essentially independent of $t$ and whose module density is roughly an order of magnitude lower than the Cycle-1 encoding's. The observation is symmetric across participants within each cycle and consistent with the structural difference between in-band and out-of-band cryptographic content (Section~\ref{sect:disc_qr}).
+
+\subsubsection{System Usability Scale (SUS) across both cycles}
+\label{sect:results_uat_sus}
+
+\paragraph{}The six-item SUS adaptation~\cite{brooke1996sus} was administered to all ten participants across the two cycles. Five items were positively keyed --- frequency of intended use, ease of use, integration of functions, learnability, and perceived security --- and one item was negatively keyed (need for technical support to operate the system). Each was rated on a 5-point Likert scale.
+
+\paragraph{}All five positively keyed items received unanimous ratings in the 4--5 range across both cycles, indicating strong agreement with the system's usability claims. The negatively keyed item, ``\textit{I think that I would need the support of a technical person to use this system}'', received a unanimous rating of 1 (Strongly Disagree) from every participant in both cycles. Following the standard SUS scoring convention~\cite{brooke1996sus, bangor2008sus}, in which each positive item contributes ($\textit{rating} - 1$) and each negative item contributes ($5 - \textit{rating}$), the per-item contribution for every item in this study lies in the closed interval $[3, 4]$ out of a maximum of $4$. The aggregate normalised score, computed as
+\[
+\textit{SUS}_{6} \;=\; \frac{\sum_{i=1}^{6} c_i}{6 \times 4} \times 100,
+\]
+where $c_i$ denotes the per-item contribution, falls within the band $[87.5,\, 100]$ in both cycles. Although this six-item adaptation departs from the canonical 10-item instrument and the resulting scale is not strictly interchangeable with normative SUS benchmarks, the result situates the prototype well above the conventional ``excellent'' threshold of 80~\cite{bangor2008sus}, and --- equally important for the iterative design --- the Phase-4 refinement preserved that SUS band rather than degrading it.
+
+\subsubsection{Perceived Security and Open-Ended Feedback}
+\label{sect:results_uat_open}
+
+\paragraph{}On Section~5 of the survey (``Multi-Party Approval''), all ten participants across both cycles selected either ``Yes, significantly safer'' or ``Somewhat safer'' when asked whether the requirement for multi-party approval increased their perception of the system's safety against unauthorised spending. No participant selected the ``No difference'' or ``No, it felt less secure'' options. This finding is consistent with the literature on mental models of multi-party authorisation~\cite{komlo2021}, which reports that visible enforcement of an approval quorum tends to dominate perceived security over the underlying cryptographic mechanism, regardless of whether participants understand the latter.
+
+\paragraph{}Two recurring suggestions emerged from the open-ended feedback (Section~7.1 of the survey instrument), each raised independently by participants in both cycles:
+
+\begin{enumerate}
+  \item \textbf{A Deposit / fund-replenishment feature.} Several participants observed that the prototype currently models only the spending side of a joint account: members can debit the shared balance subject to threshold approval, but there is no symmetric flow for crediting it. Participants asked whether large \textit{deposits} should also require multi-party acknowledgement (for instance, to prevent a single member from quietly retitling external funds into the joint account) or whether deposits should be permissive by default. Because addressing this would require a new protocol message and an extension to the threshold policy --- not just an interface refinement --- it was held out of Phase 4 and is treated as Recommendation~\ref{sect:rec_deposit} for follow-up work.
+  \item \textbf{Stricter credential confirmation at the point of approval.} Several participants observed that, in the current prototype, possession of an unlocked phone is functionally equivalent to consent to sign --- a tap on the ``Approve'' button produces a partial signature without any further authentication step. Suggestions included a per-approval password prompt, a biometric confirmation (fingerprint or Face~ID), or a short PIN. For the same scope reason --- such a change touches the binding between user intent and signing material rather than the display layer --- this was deferred to Recommendation~\ref{sect:rec_mfa} rather than incorporated in Phase 4.
+\end{enumerate}
+
+\paragraph{}On the overall recommendation question (Section~7.2), all ten participants stated they would consider using or recommending the system for a real joint account, with several volunteering the multi-party approval mechanism as the central reason. No participant offered a strictly negative recommendation.
+
+\subsection{Consolidated Evaluation}
+\label{sect:results_summary}
+
+\paragraph{}Table~\ref{tab:results-summary} consolidates the headline outcomes against the acceptance criteria stated in Section~\ref{sect:meth4}. Every quantitative criterion was satisfied with substantial margin, and every qualitative criterion (UAT scenario coverage in both cycles, SUS, perceived security) returned a positive verdict. The principal qualitative caveat to the result is the QR scan-latency observation surfaced in Cycle 1 under the Big QR encoding and absorbed by the Phase-4 refinement; the policy-driven retention of both encodings is developed in the recommendations of Section~\ref{header:recs}.
+
+\begin{table}[H]
+  \centering
+  \caption{Consolidated evaluation against acceptance criteria.}
+  \label{tab:results-summary}
+  \begin{tabular}{|l|l|l|c|}
+    \hline
+    Stream & Criterion & Measured & Status \\\hline
+    Functional & Unit-test pass rate & 35 / 35 (100\%) & Pass \\\hline
+    Functional & All 3-of-5 combinations verify & 10 / 10 & Pass \\\hline
+    Functional & Tampered payloads rejected & 6 / 6 & Pass \\\hline
+    Performance & Verification mean & 4.83~ms ($< 200$~ms) & Pass \\\hline
+    Performance & Verification p99 & 8~ms ($< 200$~ms) & Pass \\\hline
+    Performance & Trials under 200~ms & 30 / 30 (100\%) & Pass \\\hline
+    Adversarial & Cryptographic attacks blocked & 7 / 7 & Pass \\\hline
+    Adversarial & Protocol attacks blocked & 6 / 6 (incl.\ 2 positive controls) & Pass \\\hline
+    UAT & Scenario coverage (each cycle) & 10 / 10 & Pass \\\hline
+    UAT & Modified six-item SUS aggregate (both cycles) & 87.5--100 band & Pass \\\hline
+    UAT & Perceived multi-party safety (both cycles) & 10 / 10 positive & Pass \\\hline
+    UAT & Phase-4 refinement validation (Item 4.2) & 60\% $\rightarrow$ 0\% delay & Pass \\\hline
+  \end{tabular}
+\end{table}
