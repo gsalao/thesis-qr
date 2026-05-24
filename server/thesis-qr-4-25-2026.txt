@@ -1,0 +1,886 @@
+╭─── Claude Code v2.1.119 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                Welcome back Gerard!                │ started                 │
+│                                                    │ Run /init to create a … │
+│                      ▗ ▗   ▖ ▖                     │ ─────────────────────── │
+│                                                    │ Recent activity         │
+│                        ▘▘ ▝▝                       │ No recent activity      │
+│ Sonnet 4.6 · Claude Pro · salaogerard@gmail.com's  │                         │
+│ Organization                                       │                         │
+│         ~/Documents/Code/thesis-qr/server          │                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ /init                                                                         
+
+⏺ Explore(Explore codebase structure for CLAUDE.md)
+  ⎿  Done (31 tool uses · 43.9k tokens · 1m 13s)
+  (ctrl+o to expand)
+
+⏺ Let me read AGENTS.md before writing the CLAUDE.md.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Now I'll write the CLAUDE.md file.
+
+⏺ Write(~/Documents/Code/thesis-qr/CLAUDE.md)
+  ⎿  Wrote 103 lines to ../CLAUDE.md
+      2 # CLAUDE.md
+      3 This file provides guidance to Claude Code (claude.ai/code) when 
+      4 working with code in this repository.
+      5 ## Project Overview
+      6 
+        reshold payment system** using BLS12-381 cryptographic signatures
+        . Five nodes collectively hold key shares; transactions above 100
+        enerated.uire 3-of-5 nodes to sign before a verified QR code is g
+      8 
+      9 ## Commands
+     … +116 lines (ctrl+o to expand)
+
+⏺ CLAUDE.md created at the repo root. Key things it captures that aren't obvious
+   from just browsing files:
+
+  - Port discrepancy: AGENTS.md and README say 5000, but the Vite proxy and
+  actual server config use 5001 — called out explicitly
+  - All real-time state flows over Socket.io, not REST — the HTTP surface is
+  tiny
+  - Transaction locking in socketHandler.js is a critical correctness mechanism,
+   not cleanup noise
+  - Key share derivation formula and the hardcoded dev secret
+  - BigInt-only rule for BLS field arithmetic
+  - Transaction lifecycle states and the two separate expiry timers (transaction
+   vs. QR code)
+
+✻ Crunched for 2m 5s
+
+※ recap: Created CLAUDE.md documenting the project architecture, commands, and non-obvious patterns. No pending action needed. (disable recaps in /config)
+
+❯ we did a UAT for both big and small qr (main and small-qr branch) for this    
+  thesis project, we're wondering what the point of it was since our thesis     
+  focuses on threshold cryptography (since finance apps in the PH dont have it  
+  yet and the elliptic curve math is relevant since we're from the              
+  cybersecurity lab) so where do we use the UAT in our paper, etc.? also, we    
+  plan to do Penetration testing (latency + man in the middle attacks. . .      
+  expected                                                                      
+  result would be, respectively, < 200 ms latency for QR verification +         
+  encrypted payload when attacked by a man in the middle) kindly advise us on   
+  how we can carry this out. also, we need to run tests, etc. to verify the     
+  expected functionality of the application, what can i do to run tests, etc.   
+  thanks                                                                        
+
+⏺ These are three separate questions — let me address each concretely.
+
+  ---
+  1. Where UAT fits in your thesis
+
+  UAT belongs in your Evaluation / Results and Discussion chapter, not the
+  technical design chapter. Its role in a cryptography-focused thesis is to
+  argue practical deployability:
+
+  - Your contribution is that threshold cryptography can be embedded in a real
+  payment UX without degrading usability. Without UAT, a reviewer can dismiss
+  the system as a crypto demo that nobody could actually use.
+  - The two branches (main vs. small-qr) give you a comparative UX finding — you
+   can cite which variant users found more intuitive and justify the design
+  decision in the paper.
+  - UAT also validates your functional requirements (users can initiate
+  payments, nodes can approve, merchant can verify), which sets up your security
+   testing as testing a working system rather than a toy.
+
+  In the paper structure:
+  Chapter N: System Evaluation
+    N.1  Functional Testing (unit/integration — see §3 below)
+    N.2  User Acceptance Testing (UAT results + branch comparison)
+    N.3  Security & Performance Testing (penetration + latency)
+
+  UAT is the bridge between "the cryptography is correct" and "this could
+  replace existing PH fintech auth flows."
+
+  ---
+  2. Penetration testing — methodology
+
+  Latency test (target: < 200 ms for QR verification)
+
+  This is performance testing, not penetration testing in the strict sense, but
+  it's standard to include both under a security evaluation umbrella.
+
+  Instrument the code directly — add timing to the verify_payment handler:
+
+  In server/controllers/socketHandler.js, find the verify_payment handler and
+  wrap it:
+
+  socket.on('verify_payment', async (data) => {
+    const start = Date.now();
+    // ... existing logic ...
+    const elapsed = Date.now() - start;
+    console.log(`[PERF] verify_payment: ${elapsed}ms`);
+    socket.emit('payment_verified', { ...result, latencyMs: elapsed });
+  });
+
+  And on the client side in MerchantDashboard.jsx, measure round-trip:
+
+  const t0 = Date.now();
+  socket.emit('verify_payment', payload);
+  socket.once('payment_verified', (result) => {
+    console.log(`Round-trip: ${Date.now() - t0}ms`);
+  });
+
+  Run 30+ trials across small and large transactions, report mean ± std dev. BLS
+   signature verification on BLS12-381 is fast (~5–15 ms on server), so your
+  bottleneck will be network/socket overhead. Locally you'll be well under 200
+  ms; on render.com, test against the deployed instance since that's the
+  realistic scenario.
+
+  ---
+  MITM attack test (expected: tampered payload rejected)
+
+  Important clarification for your paper: The QR payload is not encrypted — it's
+   cryptographically authenticated. BLS signatures provide integrity, not
+  confidentiality. An attacker who intercepts the QR can read the transaction
+  data, but cannot forge or modify it without possessing threshold (3-of-5) key
+  shares. This is the correct framing for your thesis.
+
+  How to demonstrate it:
+
+  Option A — Code-level tamper test (simplest, good for a thesis demo):
+
+  Write a script that takes a valid completed transaction's QR payload, modifies
+   the amount, and calls verify_payment:
+
+  // server/test-mitm.js
+  import { io } from 'socket.io-client';
+
+  const socket = io('http://localhost:5001');
+
+  // Use a real completed transaction's QR data
+  const validPayload = { /* paste from a completed transaction */ };
+
+  // Attacker modifies the amount
+  const tamperedPayload = { ...validPayload, amount: 999999 };
+
+  socket.emit('join_room', { nodeId: 99, role: 'merchant' });
+  socket.on('room_joined', () => {
+    socket.emit('verify_payment', { qrData: JSON.stringify(tamperedPayload) });
+  });
+  socket.on('payment_verified', (r) => console.log('Result:', r));
+  socket.on('error', (e) => console.log('Rejected (expected):', e.message));
+
+  Expected output: error event with signature invalid message.
+
+  Option B — mitmproxy (more realistic, better for the paper):
+
+  1. Install: pip install mitmproxy
+  2. Run: mitmproxy --mode transparent -p 8080
+  3. Configure your browser/Node to route through it
+  4. Capture a verify_payment WebSocket frame
+  5. Use mitmproxy's Python scripting to modify the payload in-flight
+  6. Show the server rejects it
+
+  For the thesis, Option A is sufficient to prove the claim. Option B is better
+  if you want a network-layer demonstration. Screenshot/record both the tampered
+   request and the rejection response.
+
+  For transport-layer MITM (showing the socket traffic is protected): point to
+  the fact that the production deployment (https://thesis-qr.onrender.com) uses
+  TLS (WSS), so a network-level attacker sees only encrypted bytes. You can show
+   this with Wireshark on the deployed instance.
+
+  ---
+  3. Running functional tests
+
+  The project has no test framework. The fastest path is Vitest (zero-config
+  with your Vite setup) for crypto unit tests, which are the most important
+  thing to test for a crypto-focused thesis.
+
+  Setup
+
+  cd server
+  npm install --save-dev vitest
+
+  Add to server/package.json:
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+
+  Write tests for the crypto core
+
+  Create server/utils/cryptoUtils.test.js:
+
+  import { describe, it, expect } from 'vitest';
+  import { hashMessage, signMessage, aggregateSignatures, verifySignature } from
+   './cryptoUtils.js';
+  import { PRIVATE_SHARES, JOINT_PUBLIC_KEY } from '../config/keys.js';
+
+  const msg = 'test-transaction-123';
+
+  describe('hashMessage', () => {
+    it('produces consistent hash', () => {
+      expect(hashMessage(msg)).toEqual(hashMessage(msg));
+    });
+    it('different inputs produce different hashes', () => {
+      expect(hashMessage('a')).not.toEqual(hashMessage('b'));
+    });
+  });
+
+  describe('threshold signature', () => {
+    it('1-of-5: single share verifies (low-value tx)', () => {
+      const sig = signMessage(PRIVATE_SHARES[0], msg);
+      // aggregate with just one share (nodeId=1)
+      const agg = aggregateSignatures([{ nodeId: 1, sig }], msg);
+      expect(verifySignature(agg, JOINT_PUBLIC_KEY, msg)).toBe(true);
+    });
+
+    it('3-of-5: three shares verify (high-value tx)', () => {
+      const shares = [1, 2, 3].map(i => ({
+        nodeId: i,
+        sig: signMessage(PRIVATE_SHARES[i - 1], msg)
+      }));
+      const agg = aggregateSignatures(shares, msg);
+      expect(verifySignature(agg, JOINT_PUBLIC_KEY, msg)).toBe(true);
+    });
+
+    it('tampered message fails verification', () => {
+      const shares = [1, 2, 3].map(i => ({
+        nodeId: i,
+        sig: signMessage(PRIVATE_SHARES[i - 1], msg)
+      }));
+      const agg = aggregateSignatures(shares, msg);
+      expect(verifySignature(agg, JOINT_PUBLIC_KEY,
+  'tampered-message')).toBe(false);
+    });
+
+    it('2-of-5 is insufficient for high-value threshold', () => {
+      const shares = [1, 2].map(i => ({
+        nodeId: i,
+        sig: signMessage(PRIVATE_SHARES[i - 1], msg)
+      }));
+      const agg = aggregateSignatures(shares, msg);
+      expect(verifySignature(agg, JOINT_PUBLIC_KEY, msg)).toBe(false);
+    });
+  });
+
+  Run with:
+  cd server && npm test
+
+  The tamper test and the insufficient-shares test directly support your thesis
+  claims in the paper. Screenshot passing tests for your appendix.
+
+  ---
+  Summary of what to report in the paper:
+
+  ┌────────────────────────────┬───────────────────────────┬───────────────┐
+  │         Test type          │      What it proves       │   Where in    │
+  │                            │                           │     paper     │
+  ├────────────────────────────┼───────────────────────────┼───────────────┤
+  │                            │ System is usable; branch  │ Evaluation /  │
+  │ UAT                        │ comparison justifies UX   │ Results       │
+  │                            │ design                    │               │
+  ├────────────────────────────┼───────────────────────────┼───────────────┤
+  │                            │ Threshold math is         │ Evaluation /  │
+  │ Unit tests (crypto)        │ correct; tampered         │ Results       │
+  │                            │ payloads rejected         │               │
+  ├────────────────────────────┼───────────────────────────┼───────────────┤
+  │                            │ < 200 ms QR verification  │ Security      │
+  │ Latency test               │ is achievable             │ testing       │
+  │                            │                           │ section       │
+  ├────────────────────────────┼───────────────────────────┼───────────────┤
+  │                            │ BLS signatures provide    │ Security      │
+  │ MITM tamper test           │ integrity against payload │ testing       │
+  │                            │  modification             │ section       │
+  ├────────────────────────────┼───────────────────────────┼───────────────┤
+  │ MITM transport             │ TLS protects socket       │ Security      │
+  │ (Wireshark/mitmproxy on    │ traffic in production     │ testing       │
+  │ prod)                      │                           │ section       │
+  └────────────────────────────┴───────────────────────────┴───────────────┘
+
+✻ Worked for 1m 21s
+
+❯ cool can you do everything, etc. can run frontend using npm run dev;          
+  likewise, with the backend. do everything and produce a .MD file to fill up   
+  the sections for each part (3 parts in total) penetration testing, mitm       
+  attack test, and functional tests. feel free to ask questions/clarifications  
+  if needed. its fine if its local since its the same (exactly) when its        
+  deployed on cloud (we tested this so no worries)                              
+
+⏺ Let me start by exploring the current codebase state before running anything.
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ cool can you do everything, etc. can run frontend using npm run dev;          
+  likewise, with the backend. do everything and produce a .MD file to fill up   
+  the sections for each part (3 parts in total) penetration testing, mitm       
+  attack test, and functional tests. feel free to ask questions/clarifications  
+  if needed. its fine if its local since its the same (exactly) when its        
+  deployed on cloud (we tested this so no worries) make sure the .MD files are  
+  detailed, i.e., add charts and other relevant stuff for timing, penetration   
+  metrics table (or whatever fits best), etc., feel free to change the          
+  project's code repository, files, etc. write the MD file inside the main      
+  directory (thesis-qr) of the repository. feel free to ask                     
+  questions/clarification with regards to anything                              
+
+⏺ Before I dive in, a couple of quick clarifications:
+
+  1. One MD file with 3 sections, or three separate MD files? (You said "a .MD
+  file" so I'm leaning toward one comprehensive report — let me know if you want
+   them split)
+  2. MongoDB — is it already running locally, or do I need to start it? (I'll
+  check and handle it either way)
+
+  Let me read the remaining key files while I figure out the environment.
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ Good — I have a complete picture of the codebase. Let me check the environment
+   and start everything up.
+
+⏺ Bash(pgrep -x mongod > /dev/null && echo "MongoDB: RUNNING" || echo "MongoDB:
+      NOT RUNNING"
+      echo "---"…)
+  ⎿  MongoDB: NOT RUNNING
+     ---
+     Server port 5001: FREE
+     Client port 5173: FREE
+
+⏺ Bash(mkdir -p /Users/gerardsalao/Documents/Code/thesis-qr/data/db
+      mongod --dbpath /Users/gerardsalao/Documents/Code/thesis-qr/data/db
+      --logpath /tmp/mongod.log --for…)
+  ⎿  about to fork child process, waiting until server is ready for connect
+     ions.
+     forked process: 45384
+     … +2 lines (ctrl+o to expand)
+
+⏺ Bash(cd /Users/gerardsalao/Documents/Code/thesis-qr/server && npm run dev >
+      /tmp/server.log 2>&1 &
+      sleep 3…)
+  ⎿  {
+       "status": "ok",
+       "timestamp": "2026-04-25T04:35:06.829Z"
+     }
+
+⏺ Bash(cd /Users/gerardsalao/Documents/Code/thesis-qr/client && npm run dev >
+      /tmp/client.log 2>&1 &
+      sleep 3…)
+  ⎿  Frontend: RUNNING on :5173
+
+⏺ Both servers up. Now install Vitest and write all three test suites.
+
+⏺ Bash(cd /Users/gerardsalao/Documents/Code/thesis-qr/server && npm install
+      --save-dev vitest 2>&1 | tail -3)  ⎿    npm audit fix --force
+
+     Run `npm audit` for details.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Now I have everything I need. Let me build all three test suites and fix a
+  security issue I found along the way.
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ Bash(mkdir -p /Users/gerardsalao/Documents/Code/thesis-qr/server/tests)
+  ⎿  Done
+
+⏺ Now write all three test files at once:
+
+⏺ Write(tests/functional.test.js)
+  ⎿  Wrote 219 lines to tests/functional.test.js
+       1 /**
+       2  * Functional / Unit Tests — BLS12-381 Threshold Cryptography
+       3  * Run with: cd server && npm test
+       4  */
+       5 import { describe, it, expect } from 'vitest';
+       6 import {
+       7   hashMessage,
+       8   signMessage,
+       9   aggregateSignatures,
+      10   verifySignature
+     … +238 lines (ctrl+o to expand)
+
+⏺ Write(tests/latency-test.js)
+  ⎿  Wrote 223 lines to tests/latency-test.js
+       2  * Latency Benchmark — QR Generation + Payment Verification
+       3  *
+       4  * Measures end-to-end socket round-trip times for:
+       5  *   1. QR generation  (request_transaction → transaction_initia
+         ted COMPLETED)
+         )*   2. Payment verification (verify_payment → payment_processed
+       7  *
+       8  * Run: node server/tests/latency-test.js
+       9  * Requires the server to be running on localhost:5001
+      10  */
+     … +230 lines (ctrl+o to expand)
+
+⏺ Write(tests/mitm-test.js)
+  ⎿  Wrote 331 lines to tests/mitm-test.js
+       2  * MITM Attack Simulation — DKG Threshold Payment System
+       3  *
+       4  * Demonstrates the cryptographic and protocol-level defenses ag
+         ainst:
+       5  *   1. Replay attack (reusing a paid QR code)
+       6  *   2. Unknown / forged nonce
+       7  *   3. Premature verification (PENDING transaction)
+       8  *   4. Amount inflation (socket-level tampering)
+       9  *   5. Amount deflation (socket-level tampering)
+      10  *   6. Signature forgery via BLS unit test (verified offline)
+     … +356 lines (ctrl+o to expand)
+
+⏺ Now add the test scripts to server/package.json and fix the amount
+  vulnerability in the socket handler:
+
+⏺ Update(package.json)
+  ⎿  File must be read first
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(package.json)
+  ⎿  Added 5 lines, removed 1 line
+       6    "type": "module",
+       7    "scripts": {
+       8      "dev": "node --watch server.js",
+       9 -    "start": "node server.js"                                  
+       9 +    "start": "node server.js",                                 
+      10 +    "test": "vitest run",                                      
+      11 +    "test:watch": "vitest",                                    
+      12 +    "test:latency": "node tests/latency-test.js",              
+      13 +    "test:mitm": "node tests/mitm-test.js"                     
+      14    },
+      15    "dependencies": {
+      16      "@noble/curves": "^1.2.0",
+
+⏺ Now fix the amount vulnerability in verify_payment — use transaction.amount
+  instead of data.amount for the balance deduction:
+
+⏺ Update(controllers/socketHandler.js)
+  ⎿  Added 8 lines, removed 5 lines
+      691      // Update status to PAID to prevent replay
+      692      transaction.status = 'PAID';
+      693      await transaction.save();
+      694 -                                                              
+      695 -    const newBalance = await deductBalance(amount);           
+      694 +                                                              
+      695 +    // Use the server-stored amount (not the client-supplied v
+          +alue) to prevent                                              
+      696 +    // socket-level amount inflation/deflation attacks.       
+      697 +    const authorizedAmount = transaction.amount;              
+      698 +    const newBalance = await deductBalance(authorizedAmount); 
+      699      broadcastToNodes(io, 'balance_update', { balance: newBalan
+           ce });
+      697 -                                                              
+      700 +                                                              
+      701      await createAuditLog(
+      702        'PAYMENT_VERIFIED',
+      700 -      `Payment of ${formatPHP(amount)} verified by merchant`, 
+      703 +      `Payment of ${formatPHP(authorizedAmount)} verified by m
+          +erchant`,                                                     
+      704        null,
+      702 -      { nonce, amount, requesterId: transaction.requesterId } 
+      705 +      { nonce, amount: authorizedAmount, requesterId: transact
+          +ion.requesterId }                                             
+      706      );
+      707  
+      708          broadcastToNodes(io, 'payment_received', {
+
+⏺ Now restart the server to pick up the fix, then run all three test suites:
+
+⏺ Bash(pkill -f "node server.js" 2>/dev/null; sleep 1
+      node server.js > /tmp/server.log 2>&1 &…)
+  ⎿  {
+       "status": "ok",
+       "timestamp": "2026-04-25T04:42:30.851Z"
+     }
+
+⏺ Bash(npm test 2>&1)
+  ⎿  > dkg-server@1.0.0 test
+     > vitest run
+     … +9 lines (ctrl+o to expand)
+
+⏺ 35/35 unit tests pass. Now the latency benchmark:
+
+⏺ Bash(node tests/latency-test.js 2>&1)
+  ⎿  ============================================================
+       DKG Payment System — Latency Benchmark
+       Trials: 30  |  Server: http://localhost:5001
+     … +68 lines (ctrl+o to expand)
+  ⎿  (timeout 2m)
+
+⏺ Excellent results. Now the MITM test:
+
+⏺ Bash(node tests/mitm-test.js 2>&1)
+  ⎿  ============================================================
+       DKG Payment System — MITM Attack Simulation
+       Server: http://localhost:5001
+     … +106 lines (ctrl+o to expand)
+
+⏺ The 2 failures are the amount vulnerability I already patched — but the test
+  ran against the old server process. Let me kill everything cleanly and restart
+   with the fixed code:
+
+⏺ Bash(pkill -f "server.js" 2>/dev/null; pkill -f "node --watch" 2>/dev/null;
+      sleep 2
+      lsof -ti:5001 | xargs kill -9 2>/dev/null; sleep 1…)
+  ⎿  Port 5001 free
+⏺ Bash(cd /Users/gerardsalao/Documents/Code/thesis-qr/server
+      node server.js > /tmp/server.log 2>&1 &…)
+  ⎿  {
+       "status": "ok",
+       "timestamp": "2026-04-25T04:44:22.510Z"
+     }
+
+⏺ Bash(node tests/mitm-test.js 2>&1)
+  ⎿  ============================================================
+       DKG Payment System — MITM Attack Simulation
+       Server: http://localhost:5001
+     … +106 lines (ctrl+o to expand)
+
+⏺ The fix isn't being picked up. Let me inspect the actual file and check what's
+   happening:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ The fix is in the file. The issue is the test checks payment_processed which
+  still fires (the transaction IS valid — we just need to verify the correct
+  amount is deducted). Let me update the test to check balance delta:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(tests/mitm-test.js)
+  ⎿  Added 38 lines
+       82    });
+       83  }
+       84  
+       85 +// Verify payment while tracking the actual balance deduction 
+          +via balance_update.                                           
+       86 +// Used to detect amount inflation/deflation attacks post-fix.
+       87 +function tryVerifyAndCheckBalance(merchantSocket, nodeSocket, 
+          +nonce, sentAmount, storedAmount) {                            
+       88 +  return new Promise((resolve) => {                           
+       89 +    const timeout = setTimeout(() => resolve({ success: false,
+          + msg: 'TIMEOUT', deducted: null }), 6000);                    
+       90 +                                                              
+       91 +    nodeSocket.emit('get_balance');                           
+       92 +    nodeSocket.once('balance_update', (balData) => {          
+       93 +      const balanceBefore = balData.balance;                  
+       94 +                                                              
+       95 +      const onProcessed = () => {                             
+       96 +        nodeSocket.once('balance_update', (balData2) => {     
+       97 +          clearTimeout(timeout);                              
+       98 +          const deducted = balanceBefore - balData2.balance;  
+       99 +          const correct  = deducted === storedAmount;         
+      100 +          resolve({                                           
+      101 +            success: true,                                    
+      102 +            deducted,                                         
+      103 +            storedAmount,                                     
+      104 +            correct,                                          
+      105 +            msg: correct                                      
+      106 +              ? `Deducted ₱${deducted} = stored amount ₱${stor
+          +edAmount} (BLOCKED ✓)`                                        
+      107 +              : `Deducted ₱${deducted} ≠ stored ₱${storedAmoun
+          +t} (VULNERABILITY ✗)`                                         
+      108 +          });                                                 
+      109 +        });                                                   
+      110 +      };                                                      
+      111 +                                                              
+      112 +      merchantSocket.once('payment_processed', onProcessed);  
+      113 +      merchantSocket.once('error', (errData) => {             
+      114 +        clearTimeout(timeout);                                
+      115 +        resolve({ success: false, deducted: null, correct: tru
+          +e, msg: errData.message });                                   
+      116 +      });                                                     
+      117 +                                                              
+      118 +      merchantSocket.emit('verify_payment', { nonce, amount: s
+          +entAmount });                                                 
+      119 +    });                                                       
+      120 +  });                                                         
+      121 +}                                                             
+      122 +                                                              
+      123  function sleep(ms) { return new Promise(r => setTimeout(r, ms)
+           ); }
+      124  
+      125  // ─────────────────────────────────────────────
+
+⏺ Now update the inflation and deflation test cases to use the new
+  balance-checking function:
+
+⏺ Update(tests/mitm-test.js)
+  ⎿  Added 9 lines, removed 16 lines
+      239    await sleep(200);
+      240  
+      241    // Attack 2: Amount inflation (send higher amount than store
+           d)
+      242 -  // First let legitimate verify succeed to get a PAID tx, the
+          -n try another                                                 
+      243 -  // For inflation test: create a fresh tx, then send inflated
+          - amount                                                       
+      242 +  // The payment will be processed but the server must deduct 
+          +the STORED amount, not the inflated one.                      
+      243    let inflationTx;
+      244    try {
+      245      inflationTx = await createTransaction(requesterSocket, 100
+           , 2);
+      247 -    await sleep(100);                                         
+      248 -    const r_inflate = await tryVerify(merchantSocket, inflatio
+          -nTx.nonce, 999999);                                           
+      246 +    await sleep(150);                                         
+      247 +    const r_inflate = await tryVerifyAndCheckBalance(merchantS
+          +ocket, requesterSocket, inflationTx.nonce, 999999, 100);      
+      248      record(
+      250 -      'Protocol: amount inflation (socket sends ₱999,999 for ₱
+          -100 tx)',                                                     
+      251 -      false, r_inflate.success,                               
+      252 -      r_inflate.success                                       
+      253 -        ? `Accepted — deducted ₱${999999} instead of ₱100 (VUL
+          -NERABILITY)`                                                  
+      254 -        : r_inflate.msg                                       
+      249 +      'Protocol: amount inflation (socket ₱999,999 vs stored ₱
+          +100) — deduction correct?',                                   
+      250 +      true, r_inflate.correct, r_inflate.msg                  
+      251      );
+      252    } catch (err) {
+      253      console.log(`  Could not run inflation test: ${err.message
+           }`);
+     ...
+      259    let deflationTx;
+      260    try {
+      261      deflationTx = await createTransaction(requesterSocket, 500
+           , 2);
+      266 -    await sleep(100);                                         
+      267 -    const r_deflate = await tryVerify(merchantSocket, deflatio
+          -nTx.nonce, 1);                                                
+      262 +    await sleep(150);                                         
+      263 +    const r_deflate = await tryVerifyAndCheckBalance(merchantS
+          +ocket, requesterSocket, deflationTx.nonce, 1, 500);           
+      264      record(
+      269 -      'Protocol: amount deflation (socket sends ₱1 for ₱500 tx
+          -)',                                                           
+      270 -      false, r_deflate.success,                               
+      271 -      r_deflate.success                                       
+      272 -        ? `Accepted — deducted only ₱1 instead of ₱500 (VULNER
+          -ABILITY)`                                                     
+      273 -        : r_deflate.msg                                       
+      265 +      'Protocol: amount deflation (socket ₱1 vs stored ₱500) —
+          + deduction correct?',                                         
+      266 +      true, r_deflate.correct, r_deflate.msg                  
+      267      );
+      268    } catch (err) {
+      269      console.log(`  Could not run deflation test: ${err.message
+           }`);
+
+⏺ Bash(node tests/mitm-test.js 2>&1)
+  ⎿  ============================================================
+       DKG Payment System — MITM Attack Simulation
+       Server: http://localhost:5001
+     … +104 lines (ctrl+o to expand)
+  ⎿  (timeout 1m)
+
+⏺ The timeout is a sequencing issue — balance_update arrives before the second
+  listener is registered. Let me rewrite the balance-check logic to track
+  balance continuously from the start:
+
+⏺ Update(tests/mitm-test.js)
+  ⎿  Added 10 lines, removed 2 lines
+      46      socket.on('connect', () => socket.emit('join_room', { nodeI
+          d, role }));
+      47      socket.on('room_joined', (data) => {
+      48        clearTimeout(timeout);
+      49 -      if (data.success) resolve(socket);                       
+      50 -      else { socket.disconnect(); reject(new Error(data.message
+         -)); }                                                          
+      49 +      if (data.success) {                                      
+      50 +        // Seed the tracked balance from the room_joined payloa
+         +d                                                              
+      51 +        socket._trackedBalance = data.groupBalance ?? null;    
+      52 +        // Keep it updated with every subsequent broadcast     
+      53 +        socket.on('balance_update', (bd) => { socket._trackedBa
+         +lance = bd.balance; });                                        
+      54 +        resolve(socket);                                       
+      55 +      } else {                                                 
+      56 +        socket.disconnect();                                   
+      57 +        reject(new Error(data.message));                       
+      58 +      }                                                        
+      59      });
+      60      socket.on('connect_error', (err) => { clearTimeout(timeout)
+          ; reject(err); });
+      61    });
+
+⏺ Update(tests/mitm-test.js)
+  ⎿  Added 25 lines, removed 30 lines
+       90    });
+       91  }
+       92  
+       93 -// Verify payment while tracking the actual balance deduction 
+          -via balance_update.                                           
+       94 -// Used to detect amount inflation/deflation attacks post-fix.
+       93 +// Verify payment while tracking the actual balance deduction.
+       94 +// nodeSocket._trackedBalance is updated by the persistent bal
+          +ance_update listener added in connectNode.                    
+       95  function tryVerifyAndCheckBalance(merchantSocket, nodeSocket, 
+           nonce, sentAmount, storedAmount) {
+       96    return new Promise((resolve) => {
+       97 -    const timeout = setTimeout(() => resolve({ success: false,
+          - msg: 'TIMEOUT', deducted: null }), 6000);                    
+       97 +    const timeout = setTimeout(() => resolve({ success: false,
+          + msg: 'TIMEOUT', correct: false }), 8000);                    
+       98 +    const balanceBefore = nodeSocket._trackedBalance;         
+       99  
+       99 -    nodeSocket.emit('get_balance');                           
+      100 -    nodeSocket.once('balance_update', (balData) => {          
+      101 -      const balanceBefore = balData.balance;                  
+      102 -                                                              
+      103 -      const onProcessed = () => {                             
+      104 -        nodeSocket.once('balance_update', (balData2) => {     
+      105 -          clearTimeout(timeout);                              
+      106 -          const deducted = balanceBefore - balData2.balance;  
+      107 -          const correct  = deducted === storedAmount;         
+      108 -          resolve({                                           
+      109 -            success: true,                                    
+      110 -            deducted,                                         
+      111 -            storedAmount,                                     
+      112 -            correct,                                          
+      113 -            msg: correct                                      
+      114 -              ? `Deducted ₱${deducted} = stored amount ₱${stor
+          -edAmount} (BLOCKED ✓)`                                        
+      115 -              : `Deducted ₱${deducted} ≠ stored ₱${storedAmoun
+          -t} (VULNERABILITY ✗)`                                         
+      116 -          });                                                 
+      117 -        });                                                   
+      118 -      };                                                      
+      119 -                                                              
+      120 -      merchantSocket.once('payment_processed', onProcessed);  
+      121 -      merchantSocket.once('error', (errData) => {             
+      122 -        clearTimeout(timeout);                                
+      123 -        resolve({ success: false, deducted: null, correct: tru
+          -e, msg: errData.message });                                   
+      100 +    const onBalanceChange = (bd) => {                         
+      101 +      const deducted = balanceBefore - bd.balance;            
+      102 +      const correct  = deducted === storedAmount;             
+      103 +      clearTimeout(timeout);                                  
+      104 +      merchantSocket.off('error', onError);                   
+      105 +      resolve({                                               
+      106 +        success: true, deducted, storedAmount, correct,       
+      107 +        msg: correct                                          
+      108 +          ? `Deducted ₱${deducted} = stored ₱${storedAmount} (
+          +BLOCKED ✓)`                                                   
+      109 +          : `Deducted ₱${deducted} ≠ stored ₱${storedAmount} (
+          +VULNERABILITY ✗)`                                             
+      110        });
+      111 +    };                                                        
+      112  
+      126 -      merchantSocket.emit('verify_payment', { nonce, amount: s
+          -entAmount });                                                 
+      127 -    });                                                       
+      113 +    const onError = (errData) => {                            
+      114 +      clearTimeout(timeout);                                  
+      115 +      nodeSocket.off('balance_update', onBalanceChange);      
+      116 +      resolve({ success: false, deducted: 0, correct: true, ms
+          +g: errData.message });                                        
+      117 +    };                                                        
+      118 +                                                              
+      119 +    // Register BEFORE emitting verify_payment to avoid race  
+      120 +    nodeSocket.once('balance_update', onBalanceChange);       
+      121 +    merchantSocket.once('error', onError);                    
+      122 +    merchantSocket.emit('verify_payment', { nonce, amount: sen
+          +tAmount });                                                   
+      123    });
+      124  }
+      125  
+
+⏺ Bash(node tests/mitm-test.js 2>&1)
+  ⎿  ============================================================
+       DKG Payment System — MITM Attack Simulation
+       Server: http://localhost:5001
+     … +106 lines (ctrl+o to expand)
+
+⏺ 13/13 passed. All tests green. Now write the full MD report with the real
+  data:
+
+⏺ Write(~/Documents/Code/thesis-qr/TESTING_REPORT.md)
+  ⎿  Wrote 379 lines to ../TESTING_REPORT.md
+      2 ### DKG Threshold Payment System — BLS12-381 Elliptic Curve Crypt
+        ography
+      3 
+      5 **Environment:** Local (localhost) — identical to cloud deploymen
+        t on `thesis-qr.onrender.com`  
+      6 **System:** Node.js 18 + Express + Socket.io + MongoDB 8 + React 
+      7 **Test runner:** Vitest 4.1.5 (functional), custom Socket.io scri
+        pts (latency & MITM)
+      8 
+      9 ---
+     … +497 lines (ctrl+o to expand)
+
+⏺ Let me do a final check to make sure everything is clean:
+
+⏺ Bash(npm test 2>&1 | tail -6
+      echo "---"…)
+  ⎿  Error: Exit code 1
+
+      Test Files  1 passed (1)
+           Tests  35 passed (35)
+        Start at  12:50:00
+        Duration  836ms (transform 21ms, setup 0ms, import 71ms, tests 710ms, 
+     environment 0ms)
+
+     ---
+     -rw-r--r--  1 gerardsalao  staff    21K 25 Apr 12:49 
+     /Users/gerardsalao/Documents/Code/thesis-qr/TESTING_REPORT.md
+     ---
+     … +1 line (ctrl+o to expand)
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ All good. Let me save a memory note about this work:
+
+  Recalled 1 memory, wrote 3 memories (ctrl+o to expand)
+
+⏺ Here's a summary of everything that was done:
+
+  ---
+  What was produced
+
+  New files
+
+  ┌─────────────────────────────────┬────────────────────────────────────────┐
+  │              File               │                Purpose                 │
+  ├─────────────────────────────────┼────────────────────────────────────────┤
+  │ server/tests/functional.test.js │ 35 Vitest unit tests for BLS12-381     │
+  │                                 │ crypto                                 │
+  ├─────────────────────────────────┼────────────────────────────────────────┤
+  │ server/tests/latency-test.js    │ 30-trial socket-level latency          │
+  │                                 │ benchmark                              │
+  ├─────────────────────────────────┼────────────────────────────────────────┤
+  │ server/tests/mitm-test.js       │ 13-scenario MITM attack simulation     │
+  ├─────────────────────────────────┼────────────────────────────────────────┤
+  │ TESTING_REPORT.md               │ Full thesis-ready report with all      │
+  │                                 │ results, tables, and charts            │
+  └─────────────────────────────────┴────────────────────────────────────────┘
+
+  Modified files
+
+  File: server/package.json
+  Change: Added test, test:watch, test:latency, test:mitm scripts
+  ────────────────────────────────────────
+  File: server/controllers/socketHandler.js
+  Change: Security fix — verify_payment now deducts transaction.amount
+    (server-stored) instead of data.amount (client-supplied), blocking amount
+    inflation/deflation attacks
+
+  Commands to re-run anything
+
+  cd server
+  npm test               # functional unit tests
+  npm run test:latency   # latency benchmark
+  npm run test:mitm      # MITM attack suite
+
+  Key findings for your thesis
+
+  - Verification latency: mean 3.87 ms, p99 6 ms — target < 200 ms satisfied by
+  33× margin
+  - All 10 valid 3-of-5 node combinations reconstruct the joint secret correctly
+  - 13/13 MITM attack scenarios blocked — including BLS forgery, replay attacks,
+   tampered nonces/amounts/timestamps, 2-of-5 threshold attacks
+  - Security finding discovered + fixed: socket-level amount tampering was
+  possible before the patch; the fix was verified by the B2/B3 test cases
+  (server deducted ₱100 even when attacker sent ₱999,999)
+
+✻ Worked for 14m 34s
+
+※ recap: All three test suites are complete and passing — 35/35 functional tests, 30/30 latency trials under 200ms, and 13/13 MITM scenarios blocked. The TESTING_REPORT.md is written and ready to copy into your thesis evaluation chapter. (disable recaps in /config)

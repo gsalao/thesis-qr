@@ -1,9 +1,9 @@
 \section{Results and Evaluation}
 \label{header:results}
 
-\paragraph{}This section presents the empirical evaluation of the implemented prototype against the four pillars established in Section~\ref{sect:meth4}: cryptographic correctness, performance, adversarial resilience, and end-user acceptance. The evaluation was conducted on the localhost build of the prototype, whose architecture is identical to the production deployment described in Section~\ref{sect:meth4_d}; the only material difference between the two environments is the addition of a TLS termination layer at the cloud edge, which does not affect the cryptographic protocol itself but does add fixed network round-trip overhead. All artifacts referenced in this section (i.e., raw test logs, statistical summaries, and the unaltered output of the benchmark scripts) are reproduced under the project's \texttt{logs/} directory and are referenced inline by listing.
+\paragraph{}This section presents the empirical evaluation of the implemented prototype along the five-phase validation pipeline established in Section~\ref{sect:meth4}: cryptographic correctness (Phase~1), penetration testing and performance benchmarking (Phase~2), an initial User Acceptance Test (UAT Cycle~1, Phase~3), a targeted refinement pass driven by Cycle-1 feedback (Phase~4), and a second User Acceptance Test on the refined prototype (UAT Cycle~2, Phase~5). The cryptographic and benchmark phases were conducted on the localhost build of the prototype, whose architecture is identical to the production deployment described in Section~\ref{sect:meth4_d}; the only material difference between the two environments is the addition of a TLS termination layer at the cloud edge, which does not affect the cryptographic protocol itself but does add fixed network round-trip overhead. All artifacts referenced in this section (i.e., raw test logs, statistical summaries, and the unaltered output of the benchmark scripts) are reproduced under the project's \texttt{logs/} directory and are referenced inline by listing.
 
-\subsection{Functional and Cryptographic Validation}
+\subsection{Phase 1 --- Functional and Cryptographic Validation}
 \label{sect:results_func}
 
 \paragraph{}Cryptographic correctness was assessed through a Vitest-based unit suite (under \texttt{server/tests/} as \texttt{functional.test.js}) that isolates the BLS12-381 primitives (i.e., hash-to-curve, partial signing, Lagrange-based aggregation, and bilinear-pairing verification) from the network and persistence layers. The suite executes thirty-five (35) tests across seven (7) categories and completed in 707~ms on the development machine. Results are summarised in Table~\ref{tab:functional}.
@@ -35,7 +35,7 @@ e(F_{\text{sig}},\, g) \;=\; e(H(M),\, PK).
 
 \paragraph{}Tamper-resistance (Category~6) addressed the integrity guarantee. Six payload attacks were attempted: amount tampering ($\textit{amount}: 2500 \to 1$), nonce replacement, timestamp zeroing, two forged-byte signatures (random hex and all-zero), and cross-transaction signature reuse. All six were rejected by the verifier, either by the curve membership check inside the underlying \texttt{@noble/curves} library (for malformed points such as the random and all-zero forgeries) or by the pairing equation itself (for valid points produced from a different message digest). In every case, the rejection was fail-closed: the verifier returned \texttt{false} without exposing any partial information about which check had failed, removing the oracle that an attacker would otherwise need to refine forged inputs.
 
-\subsection{Performance Benchmarks}
+\subsection{Phase 2a --- Performance Benchmarks}
 \label{sect:results_perf}
 
 \paragraph{}The latency benchmark, executed via \texttt{server/tests/latency-test.js}, measures the two performance-critical operations: (i) \textbf{QR generation}, defined as the time from the \texttt{request\_transaction} emission to receipt of \texttt{transaction\_initiated} with status \texttt{COMPLETED}; and (ii) \textbf{payment verification}, the time from the \texttt{verify\_payment} emission to receipt of \texttt{payment\_processed}. Each trial used a single low-value transaction (₱100--₱109, threshold $t = 1$) with a 300~ms inter-trial delay to avoid lock contention on the per-transaction mutex. Thirty (30) consecutive trials were collected.
@@ -98,10 +98,10 @@ Result: PASS  (p95 = 7 ms)
 
 \paragraph{}A complementary observation concerns the BLS aggregation step itself. Because BLS signatures aggregate into a single compact group element regardless of the number of signers, the \textit{post}-aggregation payload size is invariant in $t$; only the pre-aggregation message complexity grows linearly with $t$, and that growth is absorbed entirely on the server. This is a structural advantage over multi-signature schemes that concatenate independent signatures into the QR payload (e.g., stacked RSA), where increasing $t$ inflates QR data density and consequently scan latency, as further discussed in Section~\ref{sect:disc_qr}.
 
-\subsection{Adversarial / MITM Validation}
+\subsection{Phase 2b --- Adversarial / MITM Validation}
 \label{sect:results_mitm}
 
-\paragraph{}Resilience against the threat model of Section~\ref{sect:meth4_b} was evaluated through the script under \texttt{ server/tests/} as \texttt{mitm-test.js}, which exercises thirteen (13) distinct attack scenarios partitioned into an offline cryptographic group (A1--A7) and an online protocol group (B1--B6). All thirteen scenarios resolved as expected; in each adversarial case the attack was blocked, and in the two positive controls (A7 and B4) the legitimate request was correctly accepted. Results are summarised in Table~\ref{tab:mitm}.
+\paragraph{}Resilience against the threat model of Section~\ref{sect:meth4_c} was evaluated through the script under \texttt{server/tests/} as \texttt{mitm-test.js}, which exercises thirteen (13) distinct attack scenarios partitioned into an offline cryptographic group (A1--A7) and an online protocol group (B1--B6). All thirteen scenarios resolved as expected; in each adversarial case the attack was blocked, and in the two positive controls (A7 and B4) the legitimate request was correctly accepted. Results are summarised in Table~\ref{tab:mitm}.
 
 \begin{table}[H]
   \centering
@@ -134,204 +134,222 @@ Result: PASS  (p95 = 7 ms)
 
 \paragraph{}On the production deployment (\texttt{https://thesis-qr.onrender.com}), all Socket.io traffic uses WebSocket Secure (\texttt{wss://}) over TLS 1.3. A network-level adversary intercepting TCP packets observes only ciphertext, so the offline cryptographic attacks A1--A7 and the protocol attacks B1--B6 effectively assume an attacker who has already broken TLS, which is a strictly stronger threat model than a passive eavesdropper. The fact that all thirteen scenarios are still defeated under that stronger assumption is, in the view of the authors, the most consequential security claim of the present study.
 
-\subsection{User Acceptance Testing (UAT)}
-\label{sect:results_uat}
+\subsection{Phase 3 --- UAT Cycle 1 (Initial Usability)}
+\label{sect:results_uat1}
 
-\paragraph{}The UAT followed the protocol set out in Section~\ref{sect:meth4_c}. A total of ten (10) participants were recruited and split into two groups of five (5) each, corresponding to a between-subjects A/B treatment of the QR code's data density. Group~A interacted with a higher-density (``Big QR'') variant of the dynamic code, in which the entire authorization payload (i.e., joint public key $PK$, generator $g$, aggregate signature $F_{\text{sig}}$, and transaction message $M$) was embedded directly in the QR matrix, yielding a self-contained, in-band cryptographic proof. Group~B used a smaller (``Small QR'') variant in which the same payload was identified by a short reference token, with the cryptographic content fetched out of band by the verifier upon scan. The two variants were therefore placed on opposite ends of a security--scannability axis: Big QR is fully self-contained and resistant to lookup-channel compromise but requires the camera to discriminate a denser module grid; Small QR is sparser and faster to scan but places trust in a separate retrieval path.
+\paragraph{}Cycle~1 followed the protocol set out in Section~\ref{sect:meth4_uat1}. A first cohort of five (5) participants exercised the prototype as it existed at the conclusion of Phase~2, in which the QR code carried its entire authorisation payload inline. In this initial encoding (subsequently termed the ``Big QR'' variant), the joint public key $PK$, the curve generator $g$, the aggregate signature $F_{\text{sig}}$, and the transaction message $M$ are serialised into the QR matrix directly, producing a self-contained, in-band cryptographic proof that the verifier can validate without contacting any external service. Cycle~1 was therefore the first occasion on which the protocol's intended encoding was placed in front of real users.
 
-\paragraph{}Each participant was assigned a phone role, namely, Shopper (initiator), Approver, or Cashier (verifier), and walked through the ten test scenarios listed in the UAT instrument. Every scenario produced the expected outcome in both groups (\textbf{10 / 10 PASS} for each of A and B), including the race-condition case (Scenario~4: three approvers tap simultaneously on a ₱2{,}000 request; the system accepts the first two valid approvals and ignores the third), the double-scan-prevention case (Scenario~5), and the timeout / QR-expiry case (Scenario~9, in which the Shopper's screen showed ``request expired'' after the two-minute QR TTL had elapsed). Two scenarios are particularly worth flagging for the discussion that follows:
+\paragraph{}Each participant was assigned a phone role (Shopper, Approver, or Cashier) and walked through the ten task scenarios listed in the UAT instrument. Every scenario produced the expected outcome (\textbf{10 / 10 PASS}), including the race-condition case (Scenario~4: three approvers tap simultaneously on a ₱2{,}000 request; the system accepts the first two valid approvals and ignores the third), the double-scan-prevention case (Scenario~5), and the timeout / QR-expiry case (Scenario~9, in which the Shopper's screen showed ``request expired'' after the two-minute QR TTL had elapsed).
 
-\begin{itemize}
-  \item \textbf{Scenario~6 (Expired QR Code).} Although the test passed, an observer note flagged that the participant ``just need[ed] to open the QR \textit{agad}'' --- i.e., that the perceived window between QR generation and scan was tighter than the formal two-minute TTL would suggest. This anticipates the friction discussion in Section~\ref{sect:disc_qr}.
-  \item \textbf{Scenario~7 (Fake / External QR).} The cashier app correctly rejected an unrelated GCash QR sticker, demonstrating that the verifier's payload-schema check (presence of $\{PK,\, g,\, F_{\text{sig}},\, M\}$) provides a usable second line of defence even before the pairing equation is evaluated. This is operationally important because it allows the verifier to discriminate ``not one of ours'' QRs without expending the cost of a pairing computation on every scan.
-\end{itemize}
+\paragraph{}The principal Cycle-1 signal arose not from a scenario failure but from the open-ended feedback (Section~7.1 of the instrument), which converged with notable consistency on the dynamic QR code's two-minute expiry window. Four of the five participants asked, in their own words, for a clearer indication of remaining QR validity: respondents requested a ``timer for [the] expiring QR code'', an ``optimise[d] QR expiry'', ``more explicit timers (graphic or numerical)'', and a timer ``visible instead of just verifying that time is up''. The fifth participant instead asked for a notification mechanism so that ``new transactions'' would be noticeable ``without [a] face-to-face meeting''. In their overall impressions (Section~7.2), all five participants were broadly positive: the system was described as ``very fast in terms of approvals'' and ``simple and seamless'', with one participant noting they would adopt it if it ``existed within GCash or other banking apps''.
+
+\paragraph{}Read together, the Cycle-1 responses indicated that the dominant friction in the interaction flow was not cryptographic or computational --- the benchmarks of Section~\ref{sect:results_perf} had already established sub-$30$~ms backend latency --- but \textit{temporal-perceptual}: participants were uneasy about whether a generated QR would still be valid by the time it was scanned, and the interface gave them no continuous, legible cue of the remaining window. This finding is what the Phase-4 refinement was scoped to address.
+
+\subsection{Phase 4 --- UI Refinement and Bug Fixes}
+\label{sect:results_refine}
+
+\paragraph{}Following the decision rule of Section~\ref{sect:meth4_refine} --- that refinements must be confined to the interaction and encoding layers so as not to invalidate the Phase~1 and Phase~2 evidence --- the Cycle-1 feedback was triaged into two principal refinements, both targeting the QR-expiry time pressure.
+
+\paragraph{a.) Visible countdown timer.} The most direct response to the Cycle-1 feedback was to render an explicit, continuously updating countdown of the QR code's remaining validity on the Shopper's screen, replacing the previous design in which expiry was only confirmed after the fact. This change is purely presentational: it surfaces a value (\texttt{qrExpiresAt}) that the protocol already maintained, and alters neither the two-minute time-to-live nor any cryptographic field.
+
+\paragraph{b.) Reduced QR payload (the ``Small QR'' variant).} A second, complementary refinement addressed the same time pressure from the opposite direction: rather than only making the remaining window legible, it shortened the time the window is consumed by scanning. The refinement introduced an alternative encoding --- subsequently the ``Small QR'' variant --- in which the authorisation envelope is identified by a short reference token, with the cryptographic content retrieved out of band by the verifier on scan over the same authenticated channel the protocol already trusts. Because the token is far shorter than the full $\{PK, g, F_{\text{sig}}, M\}$ envelope, the Small QR is encoded at a substantially lower QR version with a sparser module grid, which reduces the camera-autofocus burden at scan time. Crucially, this is an \textit{encoding-layer} change only: the BLS12-381 primitives, the threshold policy, the message format, the AES-256-GCM session encryption, and the pairing verification predicate are all unchanged, and the Phase~1 unit suite and Phase~2 MITM script continued to pass against the refined build. Figure~\ref{fig:qr-comparison} contrasts the two encodings at equal physical scale.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{images/fig_qr_comparison.png}
+  \caption{The two QR encodings compared across the two UAT cycles, rendered at equal physical scale. The Big QR (used in Cycle~1 and by Group~A of Cycle~2) carries the full $\{PK, g, F_{\text{sig}}, M\}$ authorisation envelope in-band, producing a denser module grid. The Small QR (introduced in Phase~4 and used by Group~B of Cycle~2) carries only a short reference token, with the verifier retrieving the same envelope out of band at scan time.}
+  \label{fig:qr-comparison}
+\end{figure}
+
+\paragraph{}Cycle~2 was then designed to evaluate the refined build and, in particular, to compare the two QR encodings directly: the second cohort was split into a Group~A that retained the Big QR and a Group~B that used the new Small QR, with both groups receiving the visible countdown timer.
+
+\subsection{Phase 5 --- UAT Cycle 2 (Final Usability)}
+\label{sect:results_uat2}
+
+\paragraph{}Cycle~2 followed the same instrument and the same ten scenarios as Cycle~1, applied to the refined build. A second cohort of ten (10) participants was recruited, disjoint from the five Cycle-1 participants, and split into two groups of five: \textbf{Group~A} ($n=5$) exercised the Big QR encoding and \textbf{Group~B} ($n=5$) exercised the Small QR encoding introduced in Phase~4. Across all fifteen UAT participants (five in Cycle~1, ten in Cycle~2), no participant took part in more than one session. As in Cycle~1, every scenario produced the expected outcome in both groups (\textbf{10 / 10 PASS} for each group), including the race-condition, double-scan, and expiry cases.
 
 \subsubsection{System Usability Scale (SUS)}
 \label{sect:results_uat_sus}
 
-\paragraph{}A six-item adaptation of the System Usability Scale~\cite{brooke1996sus} was administered to all ten participants. Five items were positively keyed: frequency of intended use, ease of use, integration of functions, learnability, and perceived security. Contrarily, one item was negatively keyed (need for technical support to operate the system). Each was rated on a 5-point Likert scale.
-
-\paragraph{}All five positively keyed items received unanimous ratings in the 4--5 range across both groups, indicating strong agreement with the system's usability claims. The negatively keyed item, ``\textit{I think that I would need the support of a technical person to use this system}'', received a unanimous rating of 1 (Strongly Disagree) from every participant in both groups, indicating that no participant perceived a need for technical assistance. Following the standard SUS scoring convention~\cite{brooke1996sus, bangor2008sus}, in which each positive item contributes ($\textit{rating} - 1$) and each negative item contributes ($5 - \textit{rating}$), the per-item contribution for every item in this study lies in the closed interval $[3, 4]$ out of a maximum of $4$. The aggregate normalised score, computed as
+\paragraph{}A six-item adaptation of the System Usability Scale~\cite{brooke1996sus} was administered to all ten Cycle-2 participants. Five items were positively keyed (frequency of intended use, ease of use, integration of functions, learnability, and felt confidence/security) and one item was negatively keyed (need for technical support to operate the system). Following the standard SUS convention~\cite{brooke1996sus, bangor2008sus}, each positive item contributes ($\textit{rating} - 1$) and the negative item contributes ($5 - \textit{rating}$); the six per-item contributions, each in $[0, 4]$, are summed and normalised:
 \[
-\textit{SUS}_{6} \;=\; \frac{\sum_{i=1}^{6} c_i}{6 \times 4} \times 100,
+\textit{SUS}_{6} \;=\; \frac{\sum_{i=1}^{6} c_i}{6 \times 4} \times 100.
 \]
-where $c_i$ denotes the per-item contribution, falls within the band $[87.5,\, 100]$. Although this six-item adaptation departs from the canonical 10-item instrument and the resulting scale is not strictly interchangeable with normative SUS benchmarks, the result situates the prototype well above the conventional ``excellent'' threshold of 80~\cite{bangor2008sus}.
-
-\subsubsection{QR Recognition: A/B Findings}
-\label{sect:results_uat_qr}
-
-\paragraph{}Survey item~4.2 (``\textit{Did the Cashier's scanner recognise the dynamic QR code on the first attempt?}'') is the principal source of the A/B observation. The aggregated responses are reported in Table~\ref{tab:qr-recognition} and visualised in Figure~\ref{fig:qr-recognition}.
+Per-participant scores are reported in Table~\ref{tab:sus}.
 
 \begin{table}[H]
   \centering
-  \caption{QR recognition survey results (Item 4.2) by group, $n = 5$ per group.}
+  \caption{Six-item SUS scores by Cycle-2 participant ($n = 10$). Group~A used the Big QR encoding; Group~B used the Small QR encoding.}
+  \label{tab:sus}
+  \begin{tabular}{|l|l|c|}
+    \hline
+    Group & Participant & $\textit{SUS}_{6}$ \\\hline
+    A (Big QR)   & P1 & 91.7 \\\hline
+    A (Big QR)   & P2 & 100.0 \\\hline
+    A (Big QR)   & P3 & 91.7 \\\hline
+    A (Big QR)   & P4 & 91.7 \\\hline
+    A (Big QR)   & P5 & 100.0 \\\hline
+    \multicolumn{2}{|r|}{\textbf{Group A mean}} & \textbf{95.0} \\\hline
+    B (Small QR) & P6  & 79.2 \\\hline
+    B (Small QR) & P7  & 58.3 \\\hline
+    B (Small QR) & P8  & 79.2 \\\hline
+    B (Small QR) & P9  & 33.3 \\\hline
+    B (Small QR) & P10 & 54.2 \\\hline
+    \multicolumn{2}{|r|}{\textbf{Group B mean}} & \textbf{60.8} \\\hline
+    \multicolumn{2}{|r|}{\textbf{Overall mean ($n = 10$)}} & \textbf{77.9} \\\hline
+  \end{tabular}
+\end{table}
+
+\paragraph{}The aggregate six-item SUS across the ten Cycle-2 participants is $77.9$, which sits in the upper half of the conventional SUS range and just above the $68$-point average commonly taken as the threshold of acceptable usability~\cite{bangor2008sus}. The two groups, however, diverge sharply: Group~A returned a mean of $95.0$, well into the ``excellent'' band, while Group~B returned $60.8$, below the conventional average.
+
+\paragraph{}This divergence is \textit{not} interpreted as an effect of the QR encoding, for two reasons. First, the two groups are disjoint and small ($n = 5$ each), so any between-group difference is confounded with participant composition. Second --- and decisively --- the QR-recognition item (Section~\ref{sect:results_uat_qr}) shows the Small QR group scanned at least as fast as the Big QR group, so a scannability penalty cannot account for the lower Small QR SUS. The Group~B mean is instead pulled down by two participants who paired low ratings with specific, substantive critiques rather than with any usability defect: one returned the lowest score in the study while raising a pointed concern about sub-threshold transaction splitting (discussed in Section~\ref{sect:results_uat_open}), and another returned a guarded, middling rating across all items. The SUS result is therefore reported as the single $n = 10$ aggregate of $77.9$, with the per-group split shown in Table~\ref{tab:sus} for transparency but explicitly not attributed to the encoding variable. The Cycle-1 cohort, which exercised the Big QR, returned SUS responses consistent with the Cycle-2 Big QR group's high band.
+
+\subsubsection{Latency and Scannability Perception}
+\label{sect:results_uat_qr}
+
+\paragraph{}Three survey items captured the user-perceived temporal experience. On item~4.1 (approval speed), all ten Cycle-2 participants selected ``Instant / Seamless'', confirming that the sub-$30$~ms backend latency measured in Section~\ref{sect:results_perf} is experienced as immediate. On item~6.2 (time pressure from the expiring QR code), no participant in either group selected ``High pressure''; five reported ``Slight pressure'' and five reported ``No pressure''. This is the clearest evidence that the Phase-4 visible-timer refinement achieved its goal: the QR-expiry concern that dominated the Cycle-1 open-ended feedback did not recur as a friction point in Cycle~2, and no Cycle-2 participant raised the expiry timer in their open-ended responses.
+
+\paragraph{}Item~4.2 (``\textit{Did the Cashier's scanner recognise the dynamic QR code on the first attempt?}'') is the item most directly sensitive to the QR-encoding variable. The responses are reported in Table~\ref{tab:qr-recognition} and Figure~\ref{fig:uat-recognition}.
+
+\begin{table}[H]
+  \centering
+  \caption{QR recognition (Item 4.2) by Cycle-2 group, $n = 5$ per group.}
   \label{tab:qr-recognition}
   \begin{tabular}{|l|c|c|}
     \hline
     Response & Group~A (Big QR) & Group~B (Small QR) \\\hline
-    Yes, immediately & 2 / 5 (40\%) & 3 / 5 (60\%) \\\hline
-    Took 2--3 seconds to focus & 3 / 5 (60\%) & 2 / 5 (40\%) \\\hline
+    Yes, immediately & 4 / 5 & 5 / 5 \\\hline
+    Took 2--3 seconds to focus & 1 / 5 & 0 / 5 \\\hline
     Failed / required retry & 0 / 5 & 0 / 5 \\\hline
   \end{tabular}
 \end{table}
-\begin{figure}[ht]
+
+\begin{figure}[H]
     \centering
     \begin{tikzpicture}
         \begin{axis}[
-            ybar=2pt, % slight spacing between the grouped bars
-            bar width=22pt, % width of the bars
+            ybar=2pt,
+            bar width=22pt,
             width=12cm,
             height=7.5cm,
-            % Title formatting - Single line and explicitly centered
             title={\Large UAT Item 4.2 --- Did the cashier's scanner recognize the QR\\[1ex] on the first attempt?},
             title style={align=center, font=\sffamily, yshift=2ex},
-            % Y-axis configuration
-            ymin=0, 
+            ymin=0,
             ymax=5,
             ytick={0,1,2,3,4,5},
             ymajorgrids=true,
             grid style={solid, gray!30},
-            % X-axis configuration
-            xmin=0.5, 
+            xmin=0.5,
             xmax=3.5,
             xtick={1,2,3},
             xticklabels={{Yes, Immediately}, {Took 2-3 s to focus}, {Failed / retry}},
-            % Ensure x-axis tick text is centered if it spans multiple lines
             tick label style={font=\sffamily\small, color=darkgray, align=center},
-            % Hide default axis lines and ticks to match the clean look
             axis line style={draw=none},
             tick style={draw=none},
-            % Manually draw the bottom x-axis line
             before end axis/.code={
                 \draw [gray!40] ({rel axis cs:0,0}) -- ({rel axis cs:1,0});
             },
-            % Legend configuration
             legend style={
                 at={(0.5,-0.15)},
                 anchor=north,
-                legend columns=-1, % horizontal legend
-                draw=none, % remove legend border
+                legend columns=-1,
+                draw=none,
                 font=\sffamily\small\color{darkgray},
-                /tikz/every even column/.append style={column sep=0.5cm} % spacing
+                /tikz/every even column/.append style={column sep=0.5cm}
             }
         ]
-        
-        % Data for Group A (Big QR)
         \addplot[fill=groupAblue, draw=none] coordinates {
-            (1,2) 
-            (2,3) 
+            (1,4)
+            (2,1)
             (3,0)
         };
-        
-        % Data for Group B (Small QR)
         \addplot[fill=groupBorange, draw=none] coordinates {
-            (1,3) 
-            (2,2) 
+            (1,5)
+            (2,0)
             (3,0)
         };
-        
-        % Proper curly braces to prevent comma separation issues
         \legend{{Group A (Big QR, n=5)}, {Group B (Small QR, n=5)}}
         \end{axis}
     \end{tikzpicture}
-    
-    % --- Added Caption and Label here ---
-    \caption{QR recognition responses by group (UAT Item 4.2). The 60\%~/~40\% split on the ``2--3 seconds to focus'' bin is the principal source of the A/B finding discussed in Section~\ref{sect:disc_qr}.}
-    \label{fig:qr-recognition}
+    \caption{QR recognition responses by Cycle-2 group (UAT Item 4.2). One Big QR participant reported a 2--3 second focus delay; no Small QR participant did. No participant in either group reported a hard scan failure.}
+    \label{fig:uat-recognition}
 \end{figure}
 
-
-\paragraph{}A 2--3 second focus delay was reported by a majority of the Group~A participants but only a minority of participants in Group B. This is consistent with the well-documented relationship between QR module density and camera autofocus latency: as the density of black/white modules per linear inch rises (a function of QR version and physical display size), the camera must focus more precisely to discriminate adjacent modules, and the autofocus algorithm typically requires more frames to settle~\cite{corpuz2025}. The Big QR variant in this study used QR versions that pack the entire $\sim 440$-byte cryptographic payload (the joint public key $PK$, the aggregate signature $F_{\text{sig}}$, the curve generator $g$, and the message $M$) directly into the matrix --- realised here as a version-14 QR with $77 \times 77$ modules; the Small QR variant used a much sparser version-2 QR ($25 \times 25$ modules) carrying only a short reference token, and its payload size is essentially independent of $t$. The observation is symmetric across participants and consistent with the protocol's structural choice of in-band versus out-of-band cryptographic content. No participant in either group reported a hard scan failure, which is the relevant binary acceptance criterion for the prototype; the 2--3 second penalty is a usability signal rather than a correctness one.
+\paragraph{}Every Small QR participant reported immediate recognition; among the Big QR participants, four reported immediate recognition and one reported a 2--3 second focus delay. No participant in either group reported a hard scan failure, which is the binary acceptance criterion for the prototype. The direction of this difference is consistent with the well-documented relationship between QR module density and camera-autofocus latency --- a denser matrix requires the autofocus controller more frames to settle~\cite{corpuz2025} --- and the Big QR carries an order of magnitude more data than the reference-token Small QR. The \textit{magnitude} of the observed signal, however, is small: it rests on a single delayed scan out of five Big QR trials, against zero out of five for the Small QR. It should therefore be read as a modest confirmation of an expected effect rather than as a strong empirical contrast, and the Cycle-1 Big QR cohort, whose recognition responses were consistent with the Cycle-2 Big QR group, does not materially change that reading.
 
 \subsubsection{Perceived Security and Open-Ended Feedback}
 \label{sect:results_uat_open}
 
-\paragraph{}On Section~5 of the survey (``Multi-Party Approval''), all ten participants selected either ``Yes, significantly safer'' or ``Somewhat safer'' when asked whether the requirement for multi-party approval increased their perception of the system's safety against unauthorised spending. No participant selected the ``No difference'' or ``No, it felt less secure'' options. 
+\paragraph{}On item~5.1 (``Multi-Party Approval''), all ten Cycle-2 participants selected either ``Yes, significantly safer'' (7 of 10) or ``Somewhat safer'' (3 of 10) when asked whether the requirement for multi-party approval increased their perception of safety against unauthorised spending; no participant selected ``No difference'' or ``No, it felt less secure'' (Figure~\ref{fig:uat-safety}). On item~4.3 (perceived friction), nine of ten participants chose ``A little extra effort, but worth it for the added security'', with a single participant selecting ``Too much effort for daily use''. This finding is consistent with the literature on mental models of multi-party authorisation~\cite{komlo2021}, which reports that the visible enforcement of an approval quorum tends to dominate perceived security over the underlying cryptographic mechanism.
 
-\begin{figure}[ht]
+\begin{figure}[H]
     \centering
     \begin{tikzpicture}
         \begin{axis}[
-            ybar=2pt, % slight spacing between the grouped bars
-            bar width=22pt, % width of the bars
+            ybar=2pt,
+            bar width=22pt,
             width=12cm,
             height=7.5cm,
-            % Title formatting - Single line and explicitly centered
             title={\Large UAT Item 5.1 --- Did knowing that multiple people had to approve \\[0.5ex] the transaction make you feel safer against unauthorized spending?},
             title style={align=center, font=\sffamily, yshift=2ex},
-            % Y-axis configuration
-            ymin=0, 
+            ymin=0,
             ymax=5,
             ytick={0,1,2,3,4,5},
             ymajorgrids=true,
             grid style={solid, gray!30},
-            % X-axis configuration
-            xmin=0.5, 
+            xmin=0.5,
             xmax=4.5,
             xtick={1,2,3,4},
             xticklabels={{Yes, significantly safer}, {Somewhat safer}, {No difference}, {No, it felt less secure}},
-            % Ensure x-axis tick text is centered if it spans multiple lines
             tick label style={font=\sffamily\small, color=darkgray, align=center, text width=2.5cm},
-            % Hide default axis lines and ticks to match the clean look
             axis line style={draw=none},
             tick style={draw=none},
-            % Manually draw the bottom x-axis line
             before end axis/.code={
                 \draw [gray!40] ({rel axis cs:0,0}) -- ({rel axis cs:1,0});
             },
-            % Legend configuration
             legend style={
                 at={(0.5,-0.25)},
                 anchor=north,
-                legend columns=-1, % horizontal legend
-                draw=none, % remove legend border
+                legend columns=-1,
+                draw=none,
                 font=\sffamily\small\color{darkgray},
-                /tikz/every even column/.append style={column sep=0.5cm} % spacing
+                /tikz/every even column/.append style={column sep=0.5cm}
             }
         ]
-        
-        % Data for Group A (Big QR)
         \addplot[fill=groupAblue, draw=none] coordinates {
-            (1,4) 
-            (2,1) 
+            (1,4)
+            (2,1)
             (3,0)
             (4,0)
         };
-        
-        % Data for Group B (Small QR)
         \addplot[fill=groupBorange, draw=none] coordinates {
-            (1,1) 
-            (2,4) 
+            (1,3)
+            (2,2)
             (3,0)
             (4,0)
         };
-        
-        % Proper curly braces to prevent comma separation issues
         \legend{{Group A (Big QR, n=5)}, {Group B (Small QR, n=5)}}
         \end{axis}
     \end{tikzpicture}
-    
-    % --- Added Caption and Label here ---
-    \caption{Survey results for the perceived safety of the QR system}
-    \label{fig:qr-recognition}
+    \caption{Perceived safety from multi-party approval (UAT Item 5.1), by Cycle-2 group. All ten participants reported feeling at least somewhat safer; none reported no difference or reduced security.}
+    \label{fig:uat-safety}
 \end{figure}
 
-
-This finding is consistent with the literature on mental models of multi-party authorisation~\cite{komlo2021}, which reports that visible enforcement of an approval quorum tends to dominate perceived security over the underlying cryptographic mechanism, regardless of whether participants understand the latter.
-
-\paragraph{}Two recurring suggestions emerged from the open-ended feedback (Section~7.1 of the survey instrument):
+\paragraph{}The open-ended feedback (Section~7.1 of the instrument) from the Cycle-2 cohort converged on four recurring themes, none of which concerned the QR-expiry timer that had dominated Cycle~1:
 
 \begin{enumerate}
-  \item \textbf{A Deposit / fund-replenishment feature.} Several participants observed that the prototype currently models only the spending side of a joint account: members can debit the shared balance subject to threshold approval, but there is no symmetric flow for crediting it. Participants asked whether large \textit{deposits} should also require multi-party acknowledgement (for instance, to prevent a single member from quietly retitling external funds into the joint account) or whether deposits should be permissive by default. This is treated as Recommendation~\ref{sect:rec_deposit}.
-  \item \textbf{Stricter credential confirmation at the point of approval.} Several participants observed that, in the current prototype, possession of an unlocked phone is functionally equivalent to consent to sign, i.e., a tap on the ``Approve'' button produces a partial signature without any further authentication step. Suggestions included a per-approval password prompt, a biometric confirmation (fingerprint or Face~ID), or a short PIN. This is treated as Recommendation~\ref{sect:rec_mfa}.
+  \item \textbf{A deposit / fund-replenishment feature.} Four of the five Big QR participants independently asked for a deposit flow, observing that the prototype currently models only the spending side of a joint account. The requests ranged from a bare ``deposit feature'' to a ``deposit feature for sustainability'' and a pairing of depositing with member-attribution (``add names/accounts to keep track of who [is] involved''). This is the single most frequent suggestion in the study and is treated as Recommendation~\ref{sect:rec_deposit}.
+  \item \textbf{Stricter credential confirmation at the point of approval.} Three participants observed that, in the current prototype, possession of an unlocked phone is functionally equivalent to consent to sign. Their suggestions spanned all three authentication categories: a ``face recognition'' check ``to make sure [it is] really the person who approved'', ``login credentials (username + password)'', and an ``added authentication layer \dots\ in the form of biometric authentication, one-time pins, and etc.'' This is treated as Recommendation~\ref{sect:rec_mfa}.
+  \item \textbf{Out-of-band approval notifications.} Two participants noted that, because the prototype requires all members to be concurrently logged in, a pending approval ``[is] not easy to notice'' and in practice would need ``a third-party app like Messenger'' to alert co-signers. One framed this as a UX issue (pending approvals being easy to miss when scrolled off-screen under a time limit); the other framed it as a structural limitation. This is treated as Recommendation~\ref{sect:rec_notify}.
+  \item \textbf{Sub-threshold transaction splitting.} One participant raised a pointed security critique: because transactions below ₱1{,}000 require no group approval ($t = 1$), a malicious member could ``circumvent the security offered by the system by simply committing several transactions worth [₱]999''. The participant explicitly conditioned their recommendation of the system on this being handled. This is a genuine design gap; it is discussed in Section~\ref{sect:disc_limits} and addressed by Recommendation~\ref{sect:rec_velocity}.
 \end{enumerate}
 
-\paragraph{}On the overall recommendation question (Section~7.2), all ten participants stated they would consider using or recommending the system for a real joint account, with several volunteering the multi-party approval mechanism as the central reason. No participant offered a strictly negative recommendation.
+\paragraph{}On overall impressions (Section~7.2), the Cycle-2 responses were predominantly but not uniformly positive. Most participants stated they would use or recommend the system, citing the multi-party consensus mechanism (``each member is provided with equal responsibility'') and its simplicity and ease of use; one volunteered that it ``can be very effective when integrated with actual online accounts''. Two responses were qualified rather than positive: one participant declined to judge the system, citing no prior experience with joint accounts, and the participant who raised the sub-threshold-splitting concern offered only a conditional recommendation, contingent on that flaw being addressed. The honest summary is therefore that the system was well received, with two substantive reservations that map directly onto the recommendations of Section~\ref{header:recs}.
 
 \subsection{Consolidated Evaluation}
 \label{sect:results_summary}
 
-\paragraph{}Table~\ref{tab:results-summary} consolidates the headline outcomes against the acceptance criteria stated in Section~\ref{sect:meth4}. Every quantitative criterion was satisfied with substantial margin, and every qualitative criterion (UAT scenario coverage, SUS, perceived security) returned a positive verdict. The principal qualitative caveat to the result is the QR scan-latency observation in the Big QR condition, which motivates the recommendations of Section~\ref{header:recs}.
+\paragraph{}Table~\ref{tab:results-summary} consolidates the headline outcomes against the acceptance criteria stated in Section~\ref{sect:meth4}. Every quantitative correctness, performance, and adversarial criterion was satisfied with substantial margin. The user-acceptance criteria were satisfied with one nuance: scenario coverage was complete in both UAT cycles, perceived-security responses were uniformly positive, and the aggregate SUS exceeded the conventional acceptability threshold, but the SUS aggregate ($77.9$) is materially lower than the figure an inspection of the Big QR cohort alone would suggest, owing to the critical Group~B responses discussed in Section~\ref{sect:results_uat_sus}.
 
 \begin{table}[H]
   \centering
@@ -348,8 +366,9 @@ This finding is consistent with the literature on mental models of multi-party a
     Performance & Trials under 200~ms & 30 / 30 (100\%) & Pass \\\hline
     Adversarial & Cryptographic attacks blocked & 7 / 7 & Pass \\\hline
     Adversarial & Protocol attacks blocked & 6 / 6 (incl.\ 2 positive controls) & Pass \\\hline
-    UAT & Scenario coverage (each group) & 10 / 10 & Pass \\\hline
-    UAT & Modified six-item SUS aggregate & 87.5--100 band & Pass \\\hline
-    UAT & Perceived multi-party safety & 10 / 10 positive & Pass \\\hline
+    UAT & Scenario coverage (each cycle, each group) & 10 / 10 & Pass \\\hline
+    UAT & Six-item SUS aggregate (Cycle 2, $n = 10$) & 77.9 ($> 68$) & Pass \\\hline
+    UAT & Perceived multi-party safety (Cycle 2) & 10 / 10 positive & Pass \\\hline
+    UAT & QR-expiry pressure after Phase-4 timer & 0 / 10 ``high pressure'' & Pass \\\hline
   \end{tabular}
 \end{table}

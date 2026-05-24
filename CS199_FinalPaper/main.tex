@@ -432,46 +432,69 @@ Accordingly, the generated dynamic QR code is scanned by the verifier (e.g., ban
 \subsection{Research Design, Evaluation, and Validation Plan}
 \label{sect:meth4}
 
-\paragraph{}The study’s methodology is designed to formally test the central hypothesis: that the proposed (\textit{t}, \textit{n}) TSS-based protocol will significantly demonstrate enhanced security against data manipulation and replay attacks, while simultaneously maintaining acceptable performance overhead and user-rated usability.
+\paragraph{}The study's methodology is designed to formally test the central hypothesis: that the proposed (\textit{t}, \textit{n}) TSS-based protocol will significantly demonstrate enhanced security against data manipulation and replay attacks, while simultaneously maintaining acceptable performance overhead and user-rated usability.
 
 \subsubsection{Experimental Design Framework}
 \label{sect:meth4_a}
-\paragraph{}The research employs a mixed-methods paradigm within a Design Science framework. This approach involves developing a functional prototype of the dynamic QR code payment system, followed by rigorous experimental testing. The experimental design integrates an iterative User Acceptance Testing (UAT) phase with controlled quantitative experiments. By manipulating independent variables, specifically the threshold value $t$ and network conditions, the study will measure their impact on dependent variables, including signature generation time, verification speed, and attack resistance.
+\paragraph{}The research employs a mixed-methods paradigm within a Design Science framework. A functional prototype of the dynamic QR code payment system is developed, then subjected to a five-phase validation pipeline that proceeds from internal correctness outward to end-user acceptance. The ordering of these phases is deliberate: it would be premature to subject a system to user testing before its cryptographic primitives are known to satisfy the protocol's mathematical claims, and it would be equally premature to draw usability conclusions before the system's behaviour under adversarial conditions is bounded. Accordingly, validation proceeds in the following order:
 
-\subsubsection{Performance and Usability Evaluation}
+\begin{enumerate}
+    \item \textbf{Phase 1 --- Cryptographic correctness.} An isolated unit-test suite establishes that the BLS12-381 primitives (hash-to-curve, partial signing, Lagrange-based aggregation, and bilinear-pairing verification) satisfy the protocol's mathematical specification: every legitimate threshold-sized aggregate verifies, and every sub-threshold aggregate fails.
+    \item \textbf{Phase 2 --- Penetration testing and performance benchmarking.} With correctness established, the system is exercised against the attack-vector catalogue drawn from the threat model of Section~\ref{sect:rrl_2}, and its end-to-end latency is benchmarked against the user-perceptible target stated below. The two evaluations are grouped because they share a precondition --- a cryptographically correct system --- and because together they characterise the system's behaviour in the absence of human input.
+    \item \textbf{Phase 3 --- User Acceptance Test, Cycle 1.} The verified system is presented to a first cohort of participants for a formative usability evaluation. Cycle 1 is intended to surface friction in the interaction flow; its open-ended responses are treated as the input to the refinement phase that follows.
+    \item \textbf{Phase 4 --- UI refinement and bug fixes.} Findings from Cycle 1 inform a targeted refinement pass on the prototype. Refinements are scoped to the interaction and encoding layers so as not to invalidate the Phase 1 and Phase 2 evidence.
+    \item \textbf{Phase 5 --- User Acceptance Test, Cycle 2.} The refined prototype is evaluated against a second, non-overlapping cohort under the same instrument as Cycle 1, with the additional purpose of confirming that the Cycle-1 refinements improved the relevant usability signals without regressing the security or correctness properties established in Phases 1 and 2.
+\end{enumerate}
+
+\paragraph{}This pipeline manipulates two principal independent variables --- the threshold value $t$ and, from Phase 4 onward, the QR encoding strategy --- and measures their impact on dependent variables including signature generation time, verification latency, attack resistance, and user-reported usability. The five subsections that follow describe each phase; the system implementation that all phases exercise is described in Section~\ref{sect:meth4_d}.
+
+\subsubsection{Phase 1 --- Cryptographic Unit Testing}
+\label{sect:meth4_b}
+\paragraph{}Before any system-level evaluation, the core cryptographic primitives are isolated from the network and persistence layers and tested in isolation:
+\begin{itemize}
+    \item \textbf{DKG Consistency:} A cluster of $n$ nodes (with $n = 5$) is simulated. The test verifies that while each node receives a unique private key share $k_i$, all nodes deterministically derive the exact same Joint Public Key $PK$.
+    \item \textbf{BLS Aggregation Validity:} A subset of $t$ nodes signs a test message $M$. The system must aggregate these into $F_{\text{sig}}$ and pass the bilinear pairing verification $e(F_{\text{sig}}, g) = e(H(M), PK)$. Conversely, if the message payload is altered by a single bit, the verification must fail.
+    \item \textbf{Threshold dual property:} A coalition of $t - 1$ nodes must be unable to forge a valid signature, even with complete knowledge of their own shares. This is the formal expression of the threshold-security claim of the protocol.
+\end{itemize}
+\paragraph{}This phase is gating: a failure on any of the above invalidates every downstream evaluation, since no claim about adversarial resistance or usability can stand on a primitive that does not satisfy its mathematical contract.
+
+\subsubsection{Phase 2 --- Penetration Testing and Performance Benchmarking}
 \label{sect:meth4_c}
-\paragraph{}To ensure the proposed solution is practical for real-world retail environments, the evaluation is divided into usability testing and performance benchmarking.
 
-\paragraph{a.) Usability Testing.}
-An iterative User Acceptance Test (UAT) will be conducted with a sample group. Participants will execute mock purchase tasks using the joint account system, covering all anticipated use cases (e.g., standard approvals, rejections, and timeouts). Qualitative and quantitative feedback will be gathered using the System Usability Scale (SUS) to assess the perceived complexity of the multi-party approval process compared to standard single-user payments. \\
-
-The SUS results will inform iterative refinements to the prototype. Once the prototype achieves a stable usability baseline across successive UAT cycles, formal performance and security validations will commence.
+\paragraph{a.) Security and Attack Modelling.}
+With cryptographic correctness established, the protocol is subjected to the specific attack vectors identified in Section~\ref{sect:rrl_2}:
+\begin{itemize}
+    \item \textbf{Replay Attack Simulation:} A valid dynamic QR code generated for Transaction $A$ is captured and re-submitted after a set time interval ($\Delta t > \text{expiry}$). The test succeeds if the Verifier rejects the payload due to the expired \textit{Timestamp} or the previously consumed \textit{Nonce}.
+    \item \textbf{Collusion / Threshold Breach:} An attempt to generate a valid signature is made using $t-1$ key shares (one share fewer than required). The test confirms security if the resulting signature fails the pairing equation check.
+    \item \textbf{Man-in-the-Middle (Proxy) Audit:} Traffic passing through the proxy server is intercepted to verify that only AES-256-GCM encrypted ciphertext is visible, ensuring the proxy cannot read the transaction details or forge signatures.
+    \item \textbf{Payload Tampering:} The captured message $M$ is mutated (amount inflation/deflation, nonce replacement, cross-transaction signature reuse) to confirm that any deviation from the bound digest is detected at verification time.
+\end{itemize}
 
 \paragraph{b.) Performance Metrics.}
+The same phase quantifies the latency profile of the cryptographic operations on a localhost build whose architecture is identical to the production deployment described in Section~\ref{sect:meth4_d}:
 \begin{itemize}
-    \item \textbf{Computational Latency:} The time required for partial signature generation (Client CPU), aggregation (Payer CPU), and final verification (Verifier CPU) will be measured in milliseconds. The target benchmark for total process time is $<200$ms to maintain a seamless user experience.
-    \item \textbf{Data Overhead:} The payload size of the generated QR code (in bytes) will be compared against standard multi-signature approaches (e.g., stacked RSA signatures). The study aims to demonstrate that BLS aggregation results in a significantly lower-density QR code, enhancing scannability.
+    \item \textbf{Computational Latency:} The time required for partial signature generation (Client CPU), aggregation (Payer CPU), and final verification (Verifier CPU) is measured in milliseconds. The target benchmark for total verification time is $<200$ms to maintain a seamless user experience.
+    \item \textbf{Data Overhead:} The payload size of the generated QR code (in bytes) is recorded and compared against multi-signature baselines that concatenate independent signatures (e.g., stacked RSA). The aim is to demonstrate that BLS aggregation produces a single group element whose post-aggregation payload size is invariant in $t$.
 \end{itemize}
+\paragraph{}Pairing this phase with the security evaluation is intentional: both rest on the cryptographic correctness established in Phase 1, both are conducted in the absence of human participants, and together they provide the performance baseline against which any UI-driven refinement in Phase 4 must be measured.
 
+\subsubsection{Phase 3 --- User Acceptance Test, Cycle 1}
+\label{sect:meth4_uat1}
+\paragraph{}With correctness and adversarial resistance confirmed, the system is presented to its first cohort of participants for a formative usability evaluation. The trial follows the protocol enshrined in the UAT instrument: each participant is assigned a phone role --- Shopper (initiator), Approver, or Cashier (verifier) --- and walked through a set of ten task scenarios covering standard approvals, rejections, race conditions, timeouts, expired-QR replay attempts, and external-QR rejection.
+\paragraph{}Qualitative and quantitative feedback is gathered using a six-item adaptation of the System Usability Scale (SUS)~\cite{brooke1996sus, bangor2008sus}, supplemented by latency- and security-perception items and an open-ended feedback section. The aim of Cycle 1 is formative: in addition to the per-scenario pass/fail outcome, the instrument captures the observations that prioritise the refinements of Phase 4.
 
-\subsubsection{Functional and Security Validation}
-\label{sect:meth4_b}
-\paragraph{}To validate the system's integrity and security claims, a series of controlled tests and adversarial simulations will be conducted.
+\subsubsection{Phase 4 --- UI Refinement and Bug Fixes}
+\label{sect:meth4_refine}
+\paragraph{}The survey responses from Cycle 1 are reviewed and triaged into a refinement plan that addresses the highest-frequency friction points before Cycle 2 begins. Refinements are scoped to the interaction and encoding layers; any modification that would alter the cryptographic primitives, the protocol message format, or the threshold policy would invalidate the Phase 1 and Phase 2 evidence and require those phases to be re-run. The decision rule is therefore explicit: refinements proceed only when they can be justified as UI/UX or encoding-layer changes that leave the security model unchanged. Refinements judged to materially affect the user's perception of latency or scan reliability are recorded for explicit comparison in Cycle 2.
 
-\paragraph{a.) Cryptographic Unit Testing.}
-Before full system integration, the core cryptographic primitives will be isolated and tested:
+\subsubsection{Phase 5 --- User Acceptance Test, Cycle 2}
+\label{sect:meth4_uat2}
+\paragraph{}The refined prototype is evaluated against a second cohort, disjoint from the Cycle-1 cohort, under the same instrument as Cycle 1. Two complementary purposes are served:
 \begin{itemize}
-    \item \textbf{DKG Consistency:} A cluster of $n$ nodes (e.g., $n=5$) will be simulated. The test will verify that while each node receives a unique private key share $k_i$, all nodes deterministically derive the exact same Joint Public Key $PK$.
-    \item \textbf{BLS Aggregation Validity:} A subset of $t$ nodes will sign a test message $M$. The system must successfully aggregate these into $F_{\text{sig}}$ and pass the bilinear pairing verification $e(F_{\text{sig}}, g) = e(H(M), PK)$. Conversely, if the message payload is altered by a single bit, the verification must fail.
+    \item \textbf{Refinement validation.} For each refinement that targeted a Cycle-1 friction point, the relevant survey item and the open-ended responses are compared between the two cycles. If the friction signal has decreased, the refinement is judged effective.
+    \item \textbf{Final usability baseline.} The scenario coverage, SUS aggregate, and perceived-security ratings are collected so that the final prototype's usability can be reported as a stable baseline rather than as a snapshot during active iteration.
 \end{itemize}
-
-\paragraph{b.) Security and Attack Modeling.}
-The protocol will be subjected to specific attack vectors identified in the literature:
-\begin{itemize}
-    \item \textbf{Replay Attack Simulation:} A valid dynamic QR code generated for Transaction $A$ will be captured and re-submitted after a set time interval ($\Delta t > \text{expiry}$). The test is successful if the Verifier rejects the payload due to the expired \textit{Timestamp} or the previously consumed \textit{Nonce}.
-    \item \textbf{Collusion/Threshold Breach:} An attempt to generate a valid signature will be made using $t-1$ key shares (one share fewer than required). The test confirms security if the resulting signature fails the pairing equation check.
-    \item \textbf{Man-in-the-Middle (Proxy) Audit:} Traffic passing through the proxy server will be intercepted to verify that only AES-256-GCM encrypted ciphertext is visible, ensuring the proxy cannot read the transaction details or forge signatures.
-\end{itemize}
+\paragraph{}Phase 1 and Phase 2 evidence is taken to remain valid throughout Cycle 2 by construction of the refinement decision rule in Phase 4; no additional cryptographic or adversarial testing is performed in this phase except as a spot check on the refined build.
 
 
 

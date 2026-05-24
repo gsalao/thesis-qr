@@ -1,0 +1,264 @@
+
+\documentclass{beamer}
+\usetheme{AnnArbor}
+\usepackage{pgf-pie}
+\usepackage{amsmath, amssymb, amsfonts, float, enumerate, graphicx, booktabs}
+
+% Information to be included in the title page:
+\title[Dynamic Authorization in Digital Payments]{Dynamic Authorization in Digital Payments: \\ A (t, n) Threshold Signature Protocol for Securing QR Code Transactions}
+\author[Dy, Feliciano, Salao]{Denzell Dy, Nathaniel Feliciano, Gerard Salao \\ Adviser: Susan Pancho-Festin}
+\institute[CSL - UP Diliman]{Computer Security Laboratory - Department of Computer Science \\ College of Engineering, University of the Philippines Diliman}
+\date{May 25, 2026}
+
+% Note: Ensure logo.png and images.jpeg are in the same directory as your .tex file
+\titlegraphic{%
+  \includegraphics[height=1.5cm]{logo.png}%
+  \hspace{0.2cm}
+  \includegraphics[height=1.5cm]{images.jpeg}%
+}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}
+  \frametitle{Outline of Presentation}
+  \tableofcontents[hideallsubsections]
+\end{frame}
+
+% ---------------------------------------------------
+\section{The Problem Space \& Literature Gaps}
+% ---------------------------------------------------
+\begin{frame}
+  \frametitle{Vulnerabilities of Standard QR Payments}
+  Despite accounting for 85\% of mobile payments globally, QR codes exhibit critical flaws:
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{Physical/Digital Exploitation:} Susceptible to cloning, "quishing" (QR phishing), and malicious overlays.
+      \item \textbf{Single Point of Failure (SPOF):} Existing joint-account systems rely on a central signing key. If compromised, the entire fund is vulnerable.
+      \item \textbf{Authentication Dependency:} Standard 2D barcodes lack inherent cryptographic proofs; relying on post-scan backend validation introduces latency and risk.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Gaps in Existing Mitigations}
+  Current literature offers partial solutions that fail to support decentralized joint accounts:
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{Visual Cryptography \& Steganography:} Conceals data but relies on physical stacking/carrier channels; does not remove the single-key failure mode.
+      \item \textbf{Machine Learning (e.g., QsecR):} Highly reactive. Detects malicious URLs post-generation but provides no cryptographic proof of authorization.
+      \item \textbf{Dynamic QR (e.g., SQRC):} Limits replayability via freshness, but implementations still rely on single-key encryption.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------
+\section{Proposed Solution \& Methodology}
+% ---------------------------------------------------
+\begin{frame}
+  \frametitle{Our Solution: Hybrid Threshold Cryptography}
+  We propose a hybrid framework synthesizing threshold cryptography, dynamic QR generation, and proxy-mediated coordination.
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{Distributed Trust:} The private key is split into $n$ shares via DKG. The full key is never reconstructed (Forward Secrecy).
+      \item \textbf{Multi-Party Approval:} Transactions require a quorum of $t$ members to authorize using distinct shares.
+      \item \textbf{Dynamic Freshness:} Nonces and Timestamps are mathematically bound to the payload to prevent Replay Attacks.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Cryptographic Foundation: BLS12-381}
+  Each signer computes a partial signature using their private key share $k_i$:
+  $$ \sigma_i = H(M)^{k_i} = k_i \cdot H(M) $$
+  
+  The Payer aggregates them using Lagrange interpolation:
+  $$ F_{sig} = \sum_{i=1}^{t} (\lambda_i \cdot \sigma_i) = \sum_{i=1}^{t} (\lambda_i \cdot k_i \cdot H(M)) $$
+  
+  The Verifier (Merchant) uses Bilinear Pairing to validate the QR payload without knowing the private keys:
+  $$ e(F_{sig}, g) = e(H(M), PK) $$
+\end{frame}
+
+\begin{frame}
+  \frametitle{System Architecture}
+  \begin{itemize}
+      \item \textbf{Frontend (React 18 / Vite):} Role-based dashboards for Initiators, Approvers, and Verifiers.
+      \item \textbf{Real-Time Proxy (Socket.io):} Event-driven coordination. The proxy relays AES-256-GCM encrypted shares without seeing plaintext keys (Honest-but-curious model).
+      \item \textbf{Persistence (Node.js + MongoDB):} Document-based NoSQL storage enables high-speed read operations.
+      \item \textbf{Cryptography:} BLS12-381 primitives implemented via pure JavaScript (\texttt{@noble/curves}).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{The 5-Phase Validation Pipeline}
+  To ensure rigorous testing, we utilized a Design Science framework:
+  \vspace{0.2cm}
+  \begin{enumerate}
+      \item \textbf{Cryptographic Unit Testing:} Isolating the BLS12-381 primitives.
+      \item \textbf{Penetration Testing \& Benchmarking:} MITM attacks and latency profiling.
+      \item \textbf{UAT Cycle 1:} Initial formative usability evaluation.
+      \item \textbf{UI Refinement:} Iterative bug fixes based on Cycle 1 feedback.
+      \item \textbf{UAT Cycle 2:} Final usability baseline and security perception testing.
+  \end{enumerate}
+\end{frame}
+
+% ---------------------------------------------------
+\section{Results: Cryptography \& Performance}
+% ---------------------------------------------------
+\begin{frame}
+  \frametitle{Phase 1: Cryptographic Correctness}
+  The core mathematics were isolated and proven before network integration:
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{Unit Tests:} 35/35 passed successfully in 707 ms.
+      \item \textbf{Threshold Validation:} Every valid 3-of-5 combination (10/10) mathematically reconstructed the joint secret and passed the bilinear pairing equation.
+      \item \textbf{Security Validation:} Every 2-of-5 ($t-1$) attempt failed, proving that a malicious minority cannot forge a signature.
+      \item \textbf{Tamper Resistance:} The verifier rejected 6/6 payload attacks (amount tampering, nonce replacement, random hex forgery).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Phase 2a: Performance Benchmarks}
+  The acceptance criterion for verification latency was $<200$ ms.
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{Verification Latency ($n=30$):} 
+      \begin{itemize}
+          \item Mean: \textbf{4.83 ms} 
+          \item 99th Percentile (p99): \textbf{8 ms}
+          \item Margin: $25\times$ faster than the target threshold.
+      \end{itemize}
+      \item \textbf{QR Generation Latency:} Mean of 24.73 ms.
+      \item \textbf{Invariant Payload:} Unlike stacked RSA, BLS signatures aggregate into a single group element. Post-aggregation payload size is invariant to $t$.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Phase 2b: Adversarial / MITM Validation}
+  Exercised 13 distinct attack scenarios (Offline Cryptographic \& Online Protocol):
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{13/13 Scenarios Blocked:} 100\% success rate against replay and forgery.
+      \item \textbf{Amount Tampering Defeated:} Prevented amount inflation (Php 100 $\rightarrow$ Php 999,999) and deflation.
+      \item \textbf{Replay Attacks Defeated:} Blocked premature verifications and replays of PAID transactions via strict nonce ledger checks.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------
+\section{Results: Usability \& Iteration (UAT)}
+% ---------------------------------------------------
+\begin{frame}
+  \frametitle{Phase 3 \& 4: UAT Cycle 1 \& Refinements}
+  Initial testing surfaced temporal-perceptual friction rather than cryptographic issues.
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{The Friction (Felt Latency):} 4/5 users felt anxiety over the 2-minute dynamic QR expiry window because it lacked a visible indicator.
+      \item \textbf{Refinement 1 (Visible Timer):} Added a continuously updating countdown UI to relieve psychological time pressure.
+      \item \textbf{Refinement 2 (The Small QR):} Introduced an alternative QR encoding. Instead of embedding the full cryptographic payload (Big QR, $\sim$443 bytes), we tested a reference token QR (Small QR, 21 bytes) to improve camera autofocus times.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Phase 5: UAT Cycle 2 (Final Usability)}
+  \begin{itemize}
+      \item \textbf{Usability Baseline:} Achieved an aggregate System Usability Scale (SUS) score of \textbf{77.9} (above the 68-point industry average).
+      \item \textbf{Perceived Security:} 100\% (10/10) of participants reported feeling "significantly" or "somewhat" safer using multi-party approval.
+      \item \textbf{User Feedback Themes:} Elicited 4 distinct recommendations from users: (1) Deposit feature, (2) Stricter auth, (3) Push notifications, and (4) Sub-threshold transaction splitting.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------
+\section{Discussion: Analyzing the Results}
+% ---------------------------------------------------
+\begin{frame}
+  \frametitle{Discussion: Cryptographic vs. Operational Security}
+  A critical takeaway from our MITM testing:
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item A mathematically secure threshold signature is necessary but \textbf{not sufficient} on its own.
+      \item \textbf{Operational Vulnerability:} If the software blindly trusts the client's payload, a TLS-breaker could alter the payment amount post-signature.
+      \item \textbf{The Patch:} We forced the server's Socket handler to read the authoritative amount from the database, proving that application logic must actively protect mathematically bound values.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Discussion: Latency Headroom vs. Felt Latency}
+  \begin{itemize}
+      \item \textbf{Massive Headroom:} With a mean verification time of 4.83 ms, the protocol can comfortably absorb heavier future cryptography (e.g., zero-knowledge proofs) without breaching the 200 ms target.
+      \item \textbf{Felt Latency:} UAT showed users do not perceive the backend round-trip speed. User experience is dominated by psychological factors: the expiry countdown and camera autofocus times.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Discussion: The QR Scannability Trade-off}
+  The UAT revealed a strict Security vs. Scannability paradigm:
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{Big QR (In-Band):} 100\% self-contained cryptographic proof. Highly secure offline, but the dense module grid caused a 2-3 second autofocus delay for 4/5 users.
+      \item \textbf{Small QR (Out-of-Band):} Scans instantly (5/5 users). However, it shifts a fraction of the "trust budget" to the TLS transport layer, as the Merchant must fetch the real envelope from the proxy server.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Discussion: Mental Models \& Vulnerabilities}
+  \begin{itemize}
+      \item \textbf{Mental Models of Security:} Users do not trust the invisible math; they trust \textit{procedural friction}. The visible pop-up enforcing a quorum dominated their perception of safety.
+      \item \textbf{The Sub-Threshold Loophole:} A user identified that because transactions under Php 1,000 authorize at $t=1$, a malicious co-owner could drain the balance via fifty consecutive Php 999 purchases.
+      \item \textbf{Limitations:} The MITM scope assumes a network adversary, but does not model endpoint compromise (a stolen unlocked device).
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------
+\section{Recommendations \& Conclusion}
+% ---------------------------------------------------
+\begin{frame}
+  \frametitle{Recommendations: Policy \& Thresholding}
+  \begin{enumerate}
+      \item \textbf{Adaptive QR Sizing by Risk:} Utilize the Policy Engine to dynamically select the \textit{Small QR} for low-risk purchases (prioritizing UX) and the \textit{Big QR} for high-value transfers (prioritizing offline security).
+      \item \textbf{Joint Fund Replenishment:} Add a symmetric thresholding protocol for deposits, explicitly logging the source-of-funds.
+      \item \textbf{Velocity Limits on Sub-Threshold Payments:} Implement a rolling 24-hour window to track $t=1$ debits. If a user cumulatively crosses the Php 1,000 threshold, escalate all subsequent transactions to a multi-party vote ($t \ge 2$).
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Recommendations: Authentication \& UX}
+  \begin{enumerate}
+      \setcounter{enumi}{3}
+      \item \textbf{Multi-Factor Approval Confirmation:} Bind the `submit share` event to a fresh, local biometric (FaceID) or PIN check, ensuring mere possession of an unlocked phone cannot authorize a signature.
+      \item \textbf{Out-of-Band Notifications:} Utilize APNs/FCM for OS-level push notifications to alert co-signers of pending approvals without requiring the app to be open.
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Recommendations: Long-Term Architecture}
+  \begin{enumerate}
+      \setcounter{enumi}{5}
+      \item \textbf{Proactive Secret Sharing:} Implement a share refresh protocol to periodically re-randomize private shares (without changing the joint PK) to defend against long-term endpoint compromise.
+      \item \textbf{Hardware-Backed Key Storage:} Migrate private key shares from application process memory into device Secure Enclaves (Apple Secure Enclave, Android StrongBox).
+      \item \textbf{Post-Quantum Migration:} Design primitive-agnostic signature-handling logic to prepare for future lattice-based threshold variants.
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Conclusion}
+  This study successfully demonstrates that a $(t,n)$ threshold-signature protocol using BLS12-381 can deliver robust, decentralized security for joint-account payments \textbf{without sacrificing mobile latency}.
+  \vspace{0.3cm}
+  \begin{itemize}
+      \item \textbf{SPOF Eliminated:} Distributed Trust protects the joint account.
+      \item \textbf{Lightning Fast:} Verification operates in $<5$ ms.
+      \item \textbf{Adversarial Resilience:} Defeated 100\% of simulated attacks.
+      \item \textbf{User Validated:} Iterative testing resolved perceptual latency and confirmed a strong baseline for system usability (77.9 SUS).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \begin{center}
+      \Huge Thank You \\
+      \vspace{0.5cm}
+      \Large Questions?
+  \end{center}
+\end{frame}
+
+\end{document}
+
+```
